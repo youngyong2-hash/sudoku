@@ -2,7 +2,7 @@ import os
 import json
 import random
 import streamlit as st
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageOps
 from streamlit_cropper import st_cropper
 from google import genai
 from google.genai import types
@@ -11,6 +11,15 @@ from google.genai import types
 # 1. 페이지 기본 설정 및 시크릿 키 로드
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="스도쿠 스마트 AI 도우미", page_icon="🧩", layout="centered")
+
+# 모바일 화면에 자르기 박스가 넘어가지 않도록 CSS 추가
+st.markdown("""
+    <style>
+        .stApp { max-width: 100%; }
+        iframe { max-width: 100% !important; }
+        img { max-width: 100% !important; height: auto !important; }
+    </style>
+""", unsafe_allow_html=True)
 
 api_key = st.secrets.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
 
@@ -26,6 +35,16 @@ client = genai.Client(api_key=api_key)
 # 2. 유틸리티 함수 (스도쿠 생성기, 정답 계산기, 데이터 저장, 9x9 표 시각화)
 # ------------------------------------------------------------------------------
 PUZZLE_FILE = "puzzles_db.json"
+
+def optimize_mobile_image(image, max_dim=800):
+    """모바일 화면에 맞춰 EXIF 회전값을 적용하고 이미지를 알맞은 크기로 줄이는 함수"""
+    image = ImageOps.exif_transpose(image) # 스마트폰 촬영 방향 자동 교정
+    w, h = image.size
+    if max(w, h) > max_dim:
+        scale = max_dim / max(w, h)
+        new_size = (int(w * scale), int(h * scale))
+        image = image.resize(new_size, Image.Resampling.LANCZOS)
+    return image
 
 def is_valid(board, row, col, num):
     for i in range(9):
@@ -108,46 +127,16 @@ def load_puzzles():
 def render_sudoku_board_html(puzzle, solution=None):
     html = """
     <style>
-        .sudoku-container {
-            display: flex;
-            justify-content: center;
-            margin: 15px 0;
-        }
-        .sudoku-board {
-            border-collapse: collapse;
-            border: 3px solid #222222;
-            background-color: #ffffff;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        }
-        .sudoku-board td {
-            width: 38px;
-            height: 38px;
-            text-align: center;
-            vertical-align: middle;
-            border: 1px solid #cccccc;
-            font-size: 20px;
-            font-weight: bold;
-            color: #111111;
-        }
-        .sudoku-board td.solution-cell {
-            color: #1d4ed8;
-            background-color: #eff6ff;
-        }
-        .sudoku-board tr:nth-child(3n) td {
-            border-bottom: 2px solid #222222;
-        }
-        .sudoku-board td:nth-child(3n) {
-            border-right: 2px solid #222222;
-        }
-        .sudoku-board tr:first-child td {
-            border-top: 2px solid #222222;
-        }
-        .sudoku-board td:first-child {
-            border-left: 2px solid #222222;
-        }
+        .sudoku-container { display: flex; justify-content: center; margin: 15px 0; }
+        .sudoku-board { border-collapse: collapse; border: 3px solid #222222; background-color: #ffffff; }
+        .sudoku-board td { width: 38px; height: 38px; text-align: center; vertical-align: middle; border: 1px solid #cccccc; font-size: 20px; font-weight: bold; color: #111111; }
+        .sudoku-board td.solution-cell { color: #1d4ed8; background-color: #eff6ff; }
+        .sudoku-board tr:nth-child(3n) td { border-bottom: 2px solid #222222; }
+        .sudoku-board td:nth-child(3n) { border-right: 2px solid #222222; }
+        .sudoku-board tr:first-child td { border-top: 2px solid #222222; }
+        .sudoku-board td:first-child { border-left: 2px solid #222222; }
     </style>
-    <div class="sudoku-container">
-    <table class="sudoku-board">
+    <div class="sudoku-container"><table class="sudoku-board">
     """
     for r in range(9):
         html += "<tr>"
@@ -157,8 +146,7 @@ def render_sudoku_board_html(puzzle, solution=None):
                 html += f"<td>{val}</td>"
             else:
                 if solution and solution[r][c] != 0:
-                    sol_val = solution[r][c]
-                    html += f'<td class="solution-cell">{sol_val}</td>'
+                    html += f'<td class="solution-cell">{solution[r][c]}</td>'
                 else:
                     html += "<td></td>"
         html += "</tr>"
@@ -195,60 +183,56 @@ st.title("🧩 스도쿠 AI 스마트 도우미")
 tab1, tab2 = st.tabs(["📸 이미지 업로드 & 도움받기", "🎲 문제 만들기 & 보관함"])
 
 # ==============================================================================
-# TAB 1: 이미지 업로드, 이미지 조절(확대/회전), 자르기(선택) 및 분석
+# TAB 1: 모바일 최적화 업로드, 자르기, 분석
 # ==============================================================================
 with tab1:
     st.subheader("1. 스도쿠 이미지 가져오기")
     img_file = st.file_uploader("스도쿠 이미지를 촬영하거나 업로드하세요", type=["jpg", "jpeg", "png"])
 
     if img_file is not None:
+        # 모바일 자동 방향/크기 최적화 적용
         raw_image = Image.open(img_file)
+        optimized_img = optimize_mobile_image(raw_image)
+
+        # 세션 상태로 회전 각도 관리
+        if "rotate_angle" not in st.session_state:
+            st.session_state["rotate_angle"] = 0
+
+        st.subheader("2. 사진 방향 및 영역 조절")
+        col_rot1, col_rot2 = st.columns(2)
+        with col_rot1:
+            if st.button("🔄 시계방향 90° 회전"):
+                st.session_state["rotate_angle"] = (st.session_state["rotate_angle"] - 90) % 360
+        with col_rot2:
+            if st.button("↩️ 초기화"):
+                st.session_state["rotate_angle"] = 0
+
+        # 회전 적용
+        if st.session_state["rotate_angle"] != 0:
+            working_img = optimized_img.rotate(st.session_state["rotate_angle"], expand=True)
+        else:
+            working_img = optimized_img
+
+        st.write("📍 **빨간 박스** 모서리를 움직여 90도 영역에 들어맞게 조절하세요.")
         
-        # --- [신규 기능] 이미지 보정 및 확대/축소 슬라이더 ---
-        st.subheader("2. 사진 확대 및 각도 조절 (선택)")
-        with st.expander("🔍 손쉬운 조절 옵션 열기 (스도쿠 판 중앙 맞추기)", expanded=True):
-            col_zoom, col_rot = st.columns(2)
-            with col_zoom:
-                zoom_factor = st.slider("🔍 이미지 확대 비율", 1.0, 3.0, 1.0, 0.1)
-            with col_rot:
-                rotation = st.slider("🔄 이미지 회전 각도", -180, 180, 0, 90)
+        # 모바일 화면 크기에 맞게 자동 조정된 이미지 전달
+        cropped_img = st_cropper(
+            working_img,
+            realtime_update=True,
+            box_color='#FF0000',
+            aspect_ratio=(1, 1)
+        )
 
-        # 이미지 변환 작업
-        processed_img = raw_image.copy()
-        if rotation != 0:
-            processed_img = processed_img.rotate(-rotation, expand=True)
-
-        if zoom_factor > 1.0:
-            w, h = processed_img.size
-            new_w, new_h = int(w / zoom_factor), int(h / zoom_factor)
-            left = (w - new_w) // 2
-            top = (h - new_h) // 2
-            processed_img = processed_img.crop((left, top, left + new_w, top + new_h))
-
-        # --- 자르기 선택 여부 ---
-        st.subheader("3. 9x9 영역 자르기")
-        use_cropper = st.checkbox("✂️ 9x9 영역 직접 잘라내기 (체크 해제 시 전체 사진 사용)", value=True)
-
-        target_img = processed_img
-        if use_cropper:
-            st.write("격자 모서리를 조절하여 스도쿠 9x9 테두리에 맞게 맞춰주세요.")
-            target_img = st_cropper(
-                processed_img,
-                realtime_update=True,
-                box_color='#FF0000',
-                aspect_ratio=(1, 1)
-            )
-
-        if target_img:
-            st.image(target_img, caption="분석 대상 이미지", use_container_width=True)
+        if cropped_img:
+            st.image(cropped_img, caption="분석될 영역", use_container_width=True)
 
             if st.button("💡 도움받기 (단 하나의 힌트 & 검증)", type="primary"):
-                with st.spinner("AI가 스도쿠 판을 정밀 분석 중입니다..."):
+                with st.spinner("AI가 스도쿠 판을 분석 중입니다..."):
                     system_prompt = """
                     당신은 엄격하고 명확한 스도쿠 검증 튜터입니다.
-                    업로드된 이미지에서 9x9 스도쿠 판(인쇄체 숫자 및 손글씨 포함)을 찾아 분석하세요.
+                    업로드된 이미지에서 9x9 스도쿠 판(인쇄체 및 손글씨)을 분석하세요.
 
-                    반드시 아래 구조의 응답을 JSON 형식으로만 작성하세요 (다른 일반 텍스트 제외):
+                    반드시 아래 구조의 응답을 JSON 형식으로만 작성하세요:
                     {
                         "errors": [
                             {"row": 행번호(1-9), "col": 열번호(1-9), "reason": "오류 이유"}
@@ -262,14 +246,15 @@ with tab1:
                     }
 
                     [주의 규칙]
-                    1. errors: 손글씨로 적혀있는 숫자 중 스도쿠 규칙에 위배되는(틀린) 숫자의 정확한 행, 열 위치를 기록하세요. 틀린 숫자가 없으면 빈 배열 []을 반환하세요.
-                    2. single_hint: 현재 상황에서 확실하게 바로 채울 수 있는 '딱 한 칸'의 위치와 정답 숫자, 이유를 제시하세요.
+                    1. errors: 손글씨 중 스도쿠 규칙에 위배되는(틀린) 숫자의 위치(row, col)를 기록하세요. 없으면 빈 배열 []을 반환하세요.
+                    2. single_hint: 현재 확실히 바로 채울 수 있는 '단 한 칸'의 위치, 정답 숫자, 이유를 제시하세요.
                     """
 
                     try:
+                        # gemini-2.5-flash 모델 사용 (429 Quota 오류 방지 및 고속 처리)
                         response = client.models.generate_content(
-                            model="gemini-2.5-pro",
-                            contents=[target_img, "이 스도쿠 판의 틀린 손글씨 위치와 바로 해결 가능한 단 하나의 힌트를 JSON으로 출력하세요."],
+                            model="gemini-2.5-flash",
+                            contents=[cropped_img, "이 스도쿠 판의 틀린 손글씨 위치와 바로 해결 가능한 단 하나의 힌트를 JSON으로 출력하세요."],
                             config=types.GenerateContentConfig(
                                 system_instruction=system_prompt,
                                 temperature=0.1,
@@ -283,10 +268,9 @@ with tab1:
 
                         st.markdown("---")
                         
-                        # 1. 틀린 숫자가 있는 경우 Red X 표시
                         if errors:
                             st.error(f"⚠️ **검증 결과:** 손글씨 중 틀린 부분이 {len(errors)}곳 발견되었습니다!")
-                            annotated_image = draw_errors_on_image(target_img, errors)
+                            annotated_image = draw_errors_on_image(cropped_img, errors)
                             st.image(annotated_image, caption="❌ 틀린 위치가 빨간색 X로 표시되었습니다", use_container_width=True)
                             
                             for err in errors:
@@ -294,7 +278,6 @@ with tab1:
                         else:
                             st.success("✅ **검증 결과:** 현재 적힌 손글씨 중 규칙에 위배되는 숫자가 없습니다!")
 
-                        # 2. 딱 한 칸 해결 힌트 출력
                         if hint:
                             st.subheader("💡 바로 해결 가능한 한 칸 힌트")
                             st.info(
