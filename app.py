@@ -12,10 +12,10 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="스도쿠 스마트 AI 도우미", page_icon="🧩", layout="centered")
 
-# 모바일 화면 크기에 맞추는 CSS 강제 적용
+# 모바일 전용 반응형 CSS
 st.markdown("""
     <style>
-        .stApp { max-width: 100%; }
+        .stApp { max-width: 100%; padding-left: 0.5rem; padding-right: 0.5rem; }
         iframe { max-width: 100% !important; width: 100% !important; }
         img { max-width: 100% !important; height: auto !important; }
     </style>
@@ -32,19 +32,17 @@ if not api_key:
 client = genai.Client(api_key=api_key)
 
 # ------------------------------------------------------------------------------
-# 2. 유틸리티 함수 (이미지 모바일 최적화, 스도쿠 알고리즘, 표 시각화)
+# 2. 유틸리티 함수 (모바일 이미지 조절, 스도쿠 생성/풀이, 표 시각화)
 # ------------------------------------------------------------------------------
 PUZZLE_FILE = "puzzles_db.json"
 
-def fit_to_mobile_screen(image, max_width=350):
-    """스마트폰 한 화면에 사진 전체와 빨간 박스가 100% 들어오도록 크기를 자동 조절하는 함수"""
-    image = ImageOps.exif_transpose(image) # 사진 방향 자동 교정
+def prepare_mobile_image(image, target_width=320):
+    """모바일 화면 폭(320px)에 맞춰 EXIF 방향 교정 및 자동 축소"""
+    image = ImageOps.exif_transpose(image)
     w, h = image.size
-    if w > max_width:
-        scale = max_width / float(w)
-        new_height = int(float(h) * float(scale))
-        image = image.resize((max_width, new_height), Image.Resampling.LANCZOS)
-    return image
+    scale = target_width / float(w)
+    new_h = int(float(h) * scale)
+    return image.resize((target_width, new_h), Image.Resampling.LANCZOS)
 
 def is_valid(board, row, col, num):
     for i in range(9):
@@ -129,7 +127,7 @@ def render_sudoku_board_html(puzzle, solution=None):
     <style>
         .sudoku-container { display: flex; justify-content: center; margin: 15px 0; }
         .sudoku-board { border-collapse: collapse; border: 3px solid #222222; background-color: #ffffff; }
-        .sudoku-board td { width: 38px; height: 38px; text-align: center; vertical-align: middle; border: 1px solid #cccccc; font-size: 20px; font-weight: bold; color: #111111; }
+        .sudoku-board td { width: 36px; height: 36px; text-align: center; vertical-align: middle; border: 1px solid #cccccc; font-size: 18px; font-weight: bold; color: #111111; }
         .sudoku-board td.solution-cell { color: #1d4ed8; background-color: #eff6ff; }
         .sudoku-board tr:nth-child(3n) td { border-bottom: 2px solid #222222; }
         .sudoku-board td:nth-child(3n) { border-right: 2px solid #222222; }
@@ -183,7 +181,7 @@ st.title("🧩 스도쿠 AI 스마트 도우미")
 tab1, tab2 = st.tabs(["📸 이미지 업로드 & 도움받기", "🎲 문제 만들기 & 보관함"])
 
 # ==============================================================================
-# TAB 1: 모바일 업로드, 100% 한눈에 들어오는 자르기, 자동 호환 AI 모델 분석
+# TAB 1: 모바일 최적화 업로드, 100% 한눈에 들어오는 자르기, 최신 Gemini AI
 # ==============================================================================
 with tab1:
     st.subheader("1. 스도쿠 이미지 가져오기")
@@ -192,14 +190,13 @@ with tab1:
     if img_file is not None:
         raw_image = Image.open(img_file)
         
-        # 모바일 화면 폭(350px)에 맞추어 축소
-        working_img = fit_to_mobile_screen(raw_image, max_width=350)
+        # 스마트폰 화면 한눈에 들어오도록 320px 리사이징
+        working_img = prepare_mobile_image(raw_image, target_width=320)
 
-        # 회전 상태 관리
         if "rotate_angle" not in st.session_state:
             st.session_state["rotate_angle"] = 0
 
-        st.subheader("2. 사진 방향 및 영역 맞추기")
+        st.subheader("2. 사진 방향 및 영역 설정")
         col_rot1, col_rot2 = st.columns(2)
         with col_rot1:
             if st.button("🔄 90° 회전"):
@@ -211,21 +208,23 @@ with tab1:
         if st.session_state["rotate_angle"] != 0:
             working_img = working_img.rotate(st.session_state["rotate_angle"], expand=True)
 
-        st.write("📱 **빨간 박스** 모서리를 조절해 9x9 영역에 맞춰주세요.")
-        
-        # 화면에 딱 들어오는 스크린 모드 적용
-        cropped_img = st_cropper(
-            working_img,
-            realtime_update=True,
-            box_color='#FF0000',
-            aspect_ratio=(1, 1)
-        )
+        use_cropper = st.checkbox("✂️ 빨간 박스로 9x9 잘라내기 사용", value=True)
 
-        if cropped_img:
-            st.image(cropped_img, caption="분석 영역 선택 완료", use_container_width=True)
+        target_img = working_img
+        if use_cropper:
+            st.write("📱 모서리를 조절해 9x9 영역에 맞추세요.")
+            target_img = st_cropper(
+                working_img,
+                realtime_update=True,
+                box_color='#FF0000',
+                aspect_ratio=(1, 1)
+            )
+
+        if target_img:
+            st.image(target_img, caption="분석 영역 선택 완료", use_container_width=True)
 
             if st.button("💡 도움받기 (단 하나의 힌트 & 검증)", type="primary"):
-                with st.spinner("AI가 스도쿠 판을 분석 중입니다..."):
+                with st.spinner("AI가 스도쿠 판을 정밀 분석 중입니다..."):
                     system_prompt = """
                     당신은 엄격하고 명확한 스도쿠 검증 튜터입니다.
                     업로드된 이미지에서 9x9 스도쿠 판(인쇄체 및 손글씨)을 분석하세요.
@@ -248,16 +247,16 @@ with tab1:
                     2. single_hint: 현재 확실히 바로 채울 수 있는 '단 한 칸'의 위치, 정답 숫자, 이유를 제시하세요.
                     """
 
-                    # 구글 API 최신 지원 모델 후보군 (자동 대체 호출)
-                    model_candidates = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+                    # 최신 지원 모델만 호출
+                    model_candidates = ["gemini-2.5-flash", "gemini-2.0-flash"]
                     response = None
-                    last_error = None
+                    last_error_msg = ""
 
                     for model_name in model_candidates:
                         try:
                             response = client.models.generate_content(
                                 model=model_name,
-                                contents=[cropped_img, "이 스도쿠 판의 틀린 손글씨 위치와 바로 해결 가능한 단 하나의 힌트를 JSON으로 출력하세요."],
+                                contents=[target_img, "이 스도쿠 판의 틀린 손글씨 위치와 바로 해결 가능한 단 하나의 힌트를 JSON으로 출력하세요."],
                                 config=types.GenerateContentConfig(
                                     system_instruction=system_prompt,
                                     temperature=0.1,
@@ -267,7 +266,7 @@ with tab1:
                             if response and response.text:
                                 break
                         except Exception as err:
-                            last_error = err
+                            last_error_msg = str(err)
                             continue
 
                     try:
@@ -280,7 +279,7 @@ with tab1:
                             
                             if errors:
                                 st.error(f"⚠️ **검증 결과:** 손글씨 중 틀린 부분이 {len(errors)}곳 발견되었습니다!")
-                                annotated_image = draw_errors_on_image(cropped_img, errors)
+                                annotated_image = draw_errors_on_image(target_img, errors)
                                 st.image(annotated_image, caption="❌ 틀린 위치가 빨간색 X로 표시되었습니다", use_container_width=True)
                                 
                                 for err in errors:
@@ -296,7 +295,10 @@ with tab1:
                                     f"👉 **풀이 이유:** {hint.get('reason')}"
                                 )
                         else:
-                            st.error(f"분석 중 오류가 발생했습니다: {last_error}")
+                            if "429" in last_error_msg or "RESOURCE_EXHAUSTED" in last_error_msg:
+                                st.warning("⏳ 순간 요청량이 많아 무료 한도에 도달했습니다. 약 30초~1분 뒤 다시 [도움받기]를 눌러보세요!")
+                            else:
+                                st.error(f"분석 중 오류가 발생했습니다: {last_error_msg}")
 
                     except Exception as e:
                         st.error(f"결과 처리 중 오류가 발생했습니다: {e}")
