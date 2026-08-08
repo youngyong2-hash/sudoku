@@ -23,7 +23,7 @@ if not api_key:
 client = genai.Client(api_key=api_key)
 
 # ------------------------------------------------------------------------------
-# 2. 유틸리티 함수 (스도쿠 생성기, 데이터 저장, 이미지 처리, 9x9 표 시각화)
+# 2. 유틸리티 함수 (스도쿠 생성기, 정답 계산기, 데이터 저장, 9x9 표 시각화)
 # ------------------------------------------------------------------------------
 PUZZLE_FILE = "puzzles_db.json"
 
@@ -36,6 +36,7 @@ def is_valid(board, row, col, num):
     return True
 
 def solve_board(board):
+    """랜덤 스도쿠 판 생성용 백트래킹 풀이 함수"""
     for row in range(9):
         for col in range(9):
             if board[row][col] == 0:
@@ -50,14 +51,33 @@ def solve_board(board):
                 return False
     return True
 
+def solve_sudoku_exact(board):
+    """지정된 스도쿠 판의 정확한 정답 판을 계산해주는 알고리즘"""
+    board_copy = [row[:] for row in board]
+    def solve(b):
+        for row in range(9):
+            for col in range(9):
+                if b[row][col] == 0:
+                    for num in range(1, 10):
+                        if is_valid(b, row, col, num):
+                            b[row][col] = num
+                            if solve(b):
+                                return True
+                            b[row][col] = 0
+                    return False
+        return True
+    solve(board_copy)
+    return board_copy
+
 def generate_sudoku_puzzle(difficulty):
-    board = [[0] * 9 for _ in range(9)]
-    solve_board(board)
+    """난이도별 스도쿠 문제 및 전체 정답판 생성"""
+    full_board = [[0] * 9 for _ in range(9)]
+    solve_board(full_board)  # 정답판 완성
     
     clues_count = {'초급': 38, '중급': 30, '고급': 24}.get(difficulty, 30)
     remove_count = 81 - clues_count
     
-    puzzle = [row[:] for row in board]
+    puzzle = [row[:] for row in full_board]
     positions = [(r, c) for r in range(9) for c in range(9)]
     random.shuffle(positions)
     
@@ -65,14 +85,15 @@ def generate_sudoku_puzzle(difficulty):
         r, c = positions[i]
         puzzle[r][c] = 0
         
-    return puzzle
+    return puzzle, full_board
 
-def save_puzzle(difficulty, puzzle):
+def save_puzzle(difficulty, puzzle, solution):
     puzzles = load_puzzles()
     new_entry = {
         "id": len(puzzles) + 1,
         "difficulty": difficulty,
-        "puzzle": puzzle
+        "puzzle": puzzle,
+        "solution": solution
     }
     puzzles.append(new_entry)
     with open(PUZZLE_FILE, "w", encoding="utf-8") as f:
@@ -87,8 +108,11 @@ def load_puzzles():
             return []
     return []
 
-def render_sudoku_board_html(puzzle):
-    """9x9 스도쿠 판을 굵은 3x3 경계선이 있는 HTML 표로 렌더링"""
+def render_sudoku_board_html(puzzle, solution=None):
+    """
+    9x9 스도쿠 판을 굵은 3x3 경계선이 있는 HTML 표로 렌더링.
+    solution이 제공되면 원래 빈칸(0) 자리에 정답 숫자를 파란색으로 표시합니다.
+    """
     html = """
     <style>
         .sudoku-container {
@@ -112,6 +136,11 @@ def render_sudoku_board_html(puzzle):
             font-weight: bold;
             color: #111111;
         }
+        /* 정답 숫자 전용 스타일 (파란색 글씨 + 연한 파란 배경) */
+        .sudoku-board td.solution-cell {
+            color: #1d4ed8;
+            background-color: #eff6ff;
+        }
         /* 3x3 구역 구분선 굵게 지정 */
         .sudoku-board tr:nth-child(3n) td {
             border-bottom: 2px solid #222222;
@@ -133,8 +162,15 @@ def render_sudoku_board_html(puzzle):
         html += "<tr>"
         for c in range(9):
             val = puzzle[r][c]
-            val_str = str(val) if val != 0 else ""
-            html += f"<td>{val_str}</td>"
+            if val != 0:
+                html += f"<td>{val}</td>"
+            else:
+                # 빈칸일 때 solution이 온 경우 정답 숫자를 파란색 스타일 적용
+                if solution and solution[r][c] != 0:
+                    sol_val = solution[r][c]
+                    html += f'<td class="solution-cell">{sol_val}</td>'
+                else:
+                    html += "<td></td>"
         html += "</tr>"
     html += "</table></div>"
     return html
@@ -257,7 +293,7 @@ with tab1:
                         st.error(f"분석 중 오류가 발생했습니다: {e}")
 
 # ==============================================================================
-# TAB 2: 스도쿠 문제 만들기 & 저장된 데이터 보관함
+# TAB 2: 스도쿠 문제 만들기 & 저장된 데이터 보관함 (정답 보기 옵션 추가)
 # ==============================================================================
 with tab2:
     st.subheader("🎲 난이도별 스도쿠 문제 생성")
@@ -271,16 +307,23 @@ with tab2:
         gen_btn = st.button("문제 생성", type="primary")
 
     if gen_btn:
-        new_puzzle = generate_sudoku_puzzle(difficulty)
-        save_puzzle(difficulty, new_puzzle)
+        new_puzzle, new_solution = generate_sudoku_puzzle(difficulty)
+        save_puzzle(difficulty, new_puzzle, new_solution)
         st.session_state["current_puzzle"] = new_puzzle
+        st.session_state["current_solution"] = new_solution
         st.session_state["current_diff"] = difficulty
         st.success(f"새로운 {difficulty} 문제가 생성되고 보관함에 저장되었습니다!")
 
     if "current_puzzle" in st.session_state:
         st.write(f"### 📋 생성된 문제 ({st.session_state['current_diff']})")
+        
+        # 정답 보기 토글 스위치
+        show_sol = st.toggle("🔍 정답 보기 (파란색 빈칸 채우기)", key="gen_sol_toggle")
+        
         pz = st.session_state["current_puzzle"]
-        st.markdown(render_sudoku_board_html(pz), unsafe_allow_html=True)
+        sol = st.session_state["current_solution"] if show_sol else None
+        
+        st.markdown(render_sudoku_board_html(pz, solution=sol), unsafe_allow_html=True)
 
     st.markdown("---")
     st.subheader("📁 저장된 문제 보관함")
@@ -296,6 +339,14 @@ with tab2:
 
         p_data = next(p for p in saved_puzzles if p["id"] == selected_id)
         pz_saved = p_data["puzzle"]
-        st.markdown(render_sudoku_board_html(pz_saved), unsafe_allow_html=True)
+        
+        # 이전 저장 파일에 solution이 없더라도 백트래킹 알고리즘으로 자동 풀이
+        sol_saved = p_data.get("solution") or solve_sudoku_exact(pz_saved)
+        
+        # 저장된 문제용 정답 보기 토글 스위치
+        show_saved_sol = st.toggle("🔍 저장된 문제 정답 보기", key="saved_sol_toggle")
+        
+        sol_param = sol_saved if show_saved_sol else None
+        st.markdown(render_sudoku_board_html(pz_saved, solution=sol_param), unsafe_allow_html=True)
     else:
         st.info("아직 저장된 스도쿠 문제가 없습니다. 위에서 문제를 생성해 보세요!")
