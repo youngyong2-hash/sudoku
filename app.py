@@ -12,11 +12,11 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="스도쿠 스마트 AI 도우미", page_icon="🧩", layout="centered")
 
-# 모바일 화면에 자르기 박스가 넘어가지 않도록 CSS 추가
+# 모바일 화면 크기에 맞추는 CSS 강제 적용
 st.markdown("""
     <style>
         .stApp { max-width: 100%; }
-        iframe { max-width: 100% !important; }
+        iframe { max-width: 100% !important; width: 100% !important; }
         img { max-width: 100% !important; height: auto !important; }
     </style>
 """, unsafe_allow_html=True)
@@ -32,18 +32,18 @@ if not api_key:
 client = genai.Client(api_key=api_key)
 
 # ------------------------------------------------------------------------------
-# 2. 유틸리티 함수 (스도쿠 생성기, 정답 계산기, 데이터 저장, 9x9 표 시각화)
+# 2. 유틸리티 함수 (이미지 모바일 최적화, 스도쿠 알고리즘, 표 시각화)
 # ------------------------------------------------------------------------------
 PUZZLE_FILE = "puzzles_db.json"
 
-def optimize_mobile_image(image, max_dim=800):
-    """모바일 화면에 맞춰 EXIF 회전값을 적용하고 이미지를 알맞은 크기로 줄이는 함수"""
-    image = ImageOps.exif_transpose(image) # 스마트폰 촬영 방향 자동 교정
+def fit_to_mobile_screen(image, max_width=350):
+    """스마트폰 한 화면에 사진 전체와 빨간 박스가 100% 들어오도록 크기를 자동 조절하는 함수"""
+    image = ImageOps.exif_transpose(image) # 사진 방향 자동 교정
     w, h = image.size
-    if max(w, h) > max_dim:
-        scale = max_dim / max(w, h)
-        new_size = (int(w * scale), int(h * scale))
-        image = image.resize(new_size, Image.Resampling.LANCZOS)
+    if w > max_width:
+        scale = max_width / float(w)
+        new_height = int(float(h) * float(scale))
+        image = image.resize((max_width, new_height), Image.Resampling.LANCZOS)
     return image
 
 def is_valid(board, row, col, num):
@@ -183,39 +183,37 @@ st.title("🧩 스도쿠 AI 스마트 도우미")
 tab1, tab2 = st.tabs(["📸 이미지 업로드 & 도움받기", "🎲 문제 만들기 & 보관함"])
 
 # ==============================================================================
-# TAB 1: 모바일 최적화 업로드, 자르기, 분석
+# TAB 1: 모바일 업로드, 100% 한눈에 들어오는 자르기, 자동 호환 AI 모델 분석
 # ==============================================================================
 with tab1:
     st.subheader("1. 스도쿠 이미지 가져오기")
     img_file = st.file_uploader("스도쿠 이미지를 촬영하거나 업로드하세요", type=["jpg", "jpeg", "png"])
 
     if img_file is not None:
-        # 모바일 자동 방향/크기 최적화 적용
         raw_image = Image.open(img_file)
-        optimized_img = optimize_mobile_image(raw_image)
+        
+        # 모바일 화면 폭(350px)에 맞추어 축소
+        working_img = fit_to_mobile_screen(raw_image, max_width=350)
 
-        # 세션 상태로 회전 각도 관리
+        # 회전 상태 관리
         if "rotate_angle" not in st.session_state:
             st.session_state["rotate_angle"] = 0
 
-        st.subheader("2. 사진 방향 및 영역 조절")
+        st.subheader("2. 사진 방향 및 영역 맞추기")
         col_rot1, col_rot2 = st.columns(2)
         with col_rot1:
-            if st.button("🔄 시계방향 90° 회전"):
+            if st.button("🔄 90° 회전"):
                 st.session_state["rotate_angle"] = (st.session_state["rotate_angle"] - 90) % 360
         with col_rot2:
-            if st.button("↩️ 초기화"):
+            if st.button("↩️ 방향 초기화"):
                 st.session_state["rotate_angle"] = 0
 
-        # 회전 적용
         if st.session_state["rotate_angle"] != 0:
-            working_img = optimized_img.rotate(st.session_state["rotate_angle"], expand=True)
-        else:
-            working_img = optimized_img
+            working_img = working_img.rotate(st.session_state["rotate_angle"], expand=True)
 
-        st.write("📍 **빨간 박스** 모서리를 움직여 90도 영역에 들어맞게 조절하세요.")
+        st.write("📱 **빨간 박스** 모서리를 조절해 9x9 영역에 맞춰주세요.")
         
-        # 모바일 화면 크기에 맞게 자동 조정된 이미지 전달
+        # 화면에 딱 들어오는 스크린 모드 적용
         cropped_img = st_cropper(
             working_img,
             realtime_update=True,
@@ -224,7 +222,7 @@ with tab1:
         )
 
         if cropped_img:
-            st.image(cropped_img, caption="분석될 영역", use_container_width=True)
+            st.image(cropped_img, caption="분석 영역 선택 완료", use_container_width=True)
 
             if st.button("💡 도움받기 (단 하나의 힌트 & 검증)", type="primary"):
                 with st.spinner("AI가 스도쿠 판을 분석 중입니다..."):
@@ -250,44 +248,58 @@ with tab1:
                     2. single_hint: 현재 확실히 바로 채울 수 있는 '단 한 칸'의 위치, 정답 숫자, 이유를 제시하세요.
                     """
 
-                    try:
-                        # gemini-2.5-flash 모델 사용 (429 Quota 오류 방지 및 고속 처리)
-                        response = client.models.generate_content(
-                            model="gemini-2.5-flash",
-                            contents=[cropped_img, "이 스도쿠 판의 틀린 손글씨 위치와 바로 해결 가능한 단 하나의 힌트를 JSON으로 출력하세요."],
-                            config=types.GenerateContentConfig(
-                                system_instruction=system_prompt,
-                                temperature=0.1,
-                                response_mime_type="application/json"
-                            ),
-                        )
+                    # 구글 API 최신 지원 모델 후보군 (자동 대체 호출)
+                    model_candidates = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+                    response = None
+                    last_error = None
 
-                        result = json.loads(response.text)
-                        errors = result.get("errors", [])
-                        hint = result.get("single_hint", {})
-
-                        st.markdown("---")
-                        
-                        if errors:
-                            st.error(f"⚠️ **검증 결과:** 손글씨 중 틀린 부분이 {len(errors)}곳 발견되었습니다!")
-                            annotated_image = draw_errors_on_image(cropped_img, errors)
-                            st.image(annotated_image, caption="❌ 틀린 위치가 빨간색 X로 표시되었습니다", use_container_width=True)
-                            
-                            for err in errors:
-                                st.write(f"- **{err.get('row')}행 {err.get('col')}열**: {err.get('reason')}")
-                        else:
-                            st.success("✅ **검증 결과:** 현재 적힌 손글씨 중 규칙에 위배되는 숫자가 없습니다!")
-
-                        if hint:
-                            st.subheader("💡 바로 해결 가능한 한 칸 힌트")
-                            st.info(
-                                f"👉 **위치:** **{hint.get('row')}행 {hint.get('col')}열**\n\n"
-                                f"👉 **정답 숫자:** **{hint.get('number')}**\n\n"
-                                f"👉 **풀이 이유:** {hint.get('reason')}"
+                    for model_name in model_candidates:
+                        try:
+                            response = client.models.generate_content(
+                                model=model_name,
+                                contents=[cropped_img, "이 스도쿠 판의 틀린 손글씨 위치와 바로 해결 가능한 단 하나의 힌트를 JSON으로 출력하세요."],
+                                config=types.GenerateContentConfig(
+                                    system_instruction=system_prompt,
+                                    temperature=0.1,
+                                    response_mime_type="application/json"
+                                ),
                             )
+                            if response and response.text:
+                                break
+                        except Exception as err:
+                            last_error = err
+                            continue
+
+                    try:
+                        if response and response.text:
+                            result = json.loads(response.text)
+                            errors = result.get("errors", [])
+                            hint = result.get("single_hint", {})
+
+                            st.markdown("---")
+                            
+                            if errors:
+                                st.error(f"⚠️ **검증 결과:** 손글씨 중 틀린 부분이 {len(errors)}곳 발견되었습니다!")
+                                annotated_image = draw_errors_on_image(cropped_img, errors)
+                                st.image(annotated_image, caption="❌ 틀린 위치가 빨간색 X로 표시되었습니다", use_container_width=True)
+                                
+                                for err in errors:
+                                    st.write(f"- **{err.get('row')}행 {err.get('col')}열**: {err.get('reason')}")
+                            else:
+                                st.success("✅ **검증 결과:** 현재 적힌 손글씨 중 규칙에 위배되는 숫자가 없습니다!")
+
+                            if hint:
+                                st.subheader("💡 바로 해결 가능한 한 칸 힌트")
+                                st.info(
+                                    f"👉 **위치:** **{hint.get('row')}행 {hint.get('col')}열**\n\n"
+                                    f"👉 **정답 숫자:** **{hint.get('number')}**\n\n"
+                                    f"👉 **풀이 이유:** {hint.get('reason')}"
+                                )
+                        else:
+                            st.error(f"분석 중 오류가 발생했습니다: {last_error}")
 
                     except Exception as e:
-                        st.error(f"분석 중 오류가 발생했습니다: {e}")
+                        st.error(f"결과 처리 중 오류가 발생했습니다: {e}")
 
 # ==============================================================================
 # TAB 2: 스도쿠 문제 만들기 & 저장된 데이터 보관함
