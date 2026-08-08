@@ -167,20 +167,14 @@ def draw_errors_on_image(image, error_cells):
 # ------------------------------------------------------------------------------
 st.title("🧩 스도쿠 AI 스마트 도우미")
 
-tab1, tab2 = st.tabs(["📷 사진 촬영 & 도움받기", "🎲 문제 만들기 & 보관함"])
+tab1, tab2 = st.tabs(["📸 이미지 업로드 & 도움받기", "🎲 문제 만들기 & 보관함"])
 
 # ==============================================================================
-# TAB 1: 사진 촬영, 자르기, 딱 한 칸 힌트 및 X 표시
+# TAB 1: 이미지 업로드(촬영/앨범 겸용), 자르기, 딱 한 칸 힌트 및 X 표시
 # ==============================================================================
 with tab1:
     st.subheader("1. 스도쿠 이미지 가져오기")
-    upload_option = st.radio("업로드 방식 선택", ["📷 카메라", "📁 사진첩"], horizontal=True)
-
-    img_file = None
-    if upload_option == "📷 카메라 직접 촬영":
-        img_file = st.camera_input("스도쿠 판을 촬영해 주세요")
-    else:
-        img_file = st.file_uploader("스도쿠 이미지를 선택하세요", type=["jpg", "jpeg", "png"])
+    img_file = st.file_uploader("스도쿠 이미지를 촬영하거나 업로드하세요", type=["jpg", "jpeg", "png"])
 
     if img_file is not None:
         raw_image = Image.open(img_file)
@@ -286,7 +280,6 @@ with tab2:
     if "current_puzzle" in st.session_state:
         st.write(f"### 📋 생성된 문제 ({st.session_state['current_diff']})")
         pz = st.session_state["current_puzzle"]
-        # HTML 9x9 표 형식 출력
         st.markdown(render_sudoku_board_html(pz), unsafe_allow_html=True)
 
     st.markdown("---")
@@ -303,8 +296,6 @@ with tab2:
 
         p_data = next(p for p in saved_puzzles if p["id"] == selected_id)
         pz_saved = p_data["puzzle"]
-        
-        # 저장된 문제도 HTML 9x9 표 형식으로 출력
         st.markdown(render_sudoku_board_html(pz_saved), unsafe_allow_html=True)
     else:
         st.info("아직 저장된 스도쿠 문제가 없습니다. 위에서 문제를 생성해 보세요!")
