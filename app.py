@@ -174,7 +174,7 @@ tab1, tab2 = st.tabs(["📷 사진 촬영 & 도움받기", "🎲 문제 만들�
 # ==============================================================================
 with tab1:
     st.subheader("1. 스도쿠 이미지 가져오기")
-    upload_option = st.radio("업로드 방식 선택", ["📷 카메라 직접 촬영", "📁 사진첩에서 선택"], horizontal=True)
+    upload_option = st.radio("업로드 방식 선택", ["📷 카메라", "📁 사진첩"], horizontal=True)
 
     img_file = None
     if upload_option == "📷 카메라 직접 촬영":
