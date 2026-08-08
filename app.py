@@ -36,7 +36,6 @@ def is_valid(board, row, col, num):
     return True
 
 def solve_board(board):
-    """랜덤 스도쿠 판 생성용 백트래킹 풀이 함수"""
     for row in range(9):
         for col in range(9):
             if board[row][col] == 0:
@@ -52,7 +51,6 @@ def solve_board(board):
     return True
 
 def solve_sudoku_exact(board):
-    """지정된 스도쿠 판의 정확한 정답 판을 계산해주는 알고리즘"""
     board_copy = [row[:] for row in board]
     def solve(b):
         for row in range(9):
@@ -70,9 +68,8 @@ def solve_sudoku_exact(board):
     return board_copy
 
 def generate_sudoku_puzzle(difficulty):
-    """난이도별 스도쿠 문제 및 전체 정답판 생성"""
     full_board = [[0] * 9 for _ in range(9)]
-    solve_board(full_board)  # 정답판 완성
+    solve_board(full_board)
     
     clues_count = {'초급': 38, '중급': 30, '고급': 24}.get(difficulty, 30)
     remove_count = 81 - clues_count
@@ -109,10 +106,6 @@ def load_puzzles():
     return []
 
 def render_sudoku_board_html(puzzle, solution=None):
-    """
-    9x9 스도쿠 판을 굵은 3x3 경계선이 있는 HTML 표로 렌더링.
-    solution이 제공되면 원래 빈칸(0) 자리에 정답 숫자를 파란색으로 표시합니다.
-    """
     html = """
     <style>
         .sudoku-container {
@@ -136,12 +129,10 @@ def render_sudoku_board_html(puzzle, solution=None):
             font-weight: bold;
             color: #111111;
         }
-        /* 정답 숫자 전용 스타일 (파란색 글씨 + 연한 파란 배경) */
         .sudoku-board td.solution-cell {
             color: #1d4ed8;
             background-color: #eff6ff;
         }
-        /* 3x3 구역 구분선 굵게 지정 */
         .sudoku-board tr:nth-child(3n) td {
             border-bottom: 2px solid #222222;
         }
@@ -165,7 +156,6 @@ def render_sudoku_board_html(puzzle, solution=None):
             if val != 0:
                 html += f"<td>{val}</td>"
             else:
-                # 빈칸일 때 solution이 온 경우 정답 숫자를 파란색 스타일 적용
                 if solution and solution[r][c] != 0:
                     sol_val = solution[r][c]
                     html += f'<td class="solution-cell">{sol_val}</td>'
@@ -176,7 +166,6 @@ def render_sudoku_board_html(puzzle, solution=None):
     return html
 
 def draw_errors_on_image(image, error_cells):
-    """틀린 손글씨 위치(행, 열)에 빨간색 X 표시를 그리는 함수"""
     annotated = image.copy().convert("RGB")
     draw = ImageDraw.Draw(annotated)
     w, h = annotated.size
@@ -206,7 +195,7 @@ st.title("🧩 스도쿠 AI 스마트 도우미")
 tab1, tab2 = st.tabs(["📸 이미지 업로드 & 도움받기", "🎲 문제 만들기 & 보관함"])
 
 # ==============================================================================
-# TAB 1: 이미지 업로드(촬영/앨범 겸용), 자르기, 딱 한 칸 힌트 및 X 표시
+# TAB 1: 이미지 업로드, 이미지 조절(확대/회전), 자르기(선택) 및 분석
 # ==============================================================================
 with tab1:
     st.subheader("1. 스도쿠 이미지 가져오기")
@@ -215,24 +204,49 @@ with tab1:
     if img_file is not None:
         raw_image = Image.open(img_file)
         
-        st.subheader("2. 9x9 영역 잘라내기")
-        st.write("격자 모서리를 조절하여 스도쿠 9x9 테두리에 딱 맞게 맞춰주세요.")
-        
-        cropped_img = st_cropper(
-            raw_image,
-            realtime_update=True,
-            box_color='#FF0000',
-            aspect_ratio=(1, 1)
-        )
+        # --- [신규 기능] 이미지 보정 및 확대/축소 슬라이더 ---
+        st.subheader("2. 사진 확대 및 각도 조절 (선택)")
+        with st.expander("🔍 손쉬운 조절 옵션 열기 (스도쿠 판 중앙 맞추기)", expanded=True):
+            col_zoom, col_rot = st.columns(2)
+            with col_zoom:
+                zoom_factor = st.slider("🔍 이미지 확대 비율", 1.0, 3.0, 1.0, 0.1)
+            with col_rot:
+                rotation = st.slider("🔄 이미지 회전 각도", -180, 180, 0, 90)
 
-        if cropped_img:
-            st.image(cropped_img, caption="자른 스도쿠 영역", use_container_width=True)
+        # 이미지 변환 작업
+        processed_img = raw_image.copy()
+        if rotation != 0:
+            processed_img = processed_img.rotate(-rotation, expand=True)
+
+        if zoom_factor > 1.0:
+            w, h = processed_img.size
+            new_w, new_h = int(w / zoom_factor), int(h / zoom_factor)
+            left = (w - new_w) // 2
+            top = (h - new_h) // 2
+            processed_img = processed_img.crop((left, top, left + new_w, top + new_h))
+
+        # --- 자르기 선택 여부 ---
+        st.subheader("3. 9x9 영역 자르기")
+        use_cropper = st.checkbox("✂️ 9x9 영역 직접 잘라내기 (체크 해제 시 전체 사진 사용)", value=True)
+
+        target_img = processed_img
+        if use_cropper:
+            st.write("격자 모서리를 조절하여 스도쿠 9x9 테두리에 맞게 맞춰주세요.")
+            target_img = st_cropper(
+                processed_img,
+                realtime_update=True,
+                box_color='#FF0000',
+                aspect_ratio=(1, 1)
+            )
+
+        if target_img:
+            st.image(target_img, caption="분석 대상 이미지", use_container_width=True)
 
             if st.button("💡 도움받기 (단 하나의 힌트 & 검증)", type="primary"):
-                with st.spinner("AI가 스도쿠 판을 정밀 검석 중입니다..."):
+                with st.spinner("AI가 스도쿠 판을 정밀 분석 중입니다..."):
                     system_prompt = """
                     당신은 엄격하고 명확한 스도쿠 검증 튜터입니다.
-                    업로드된 9x9 스도쿠 이미지(인쇄체 숫자와 손글씨 숫자 포함)를 분석하여 반환하세요.
+                    업로드된 이미지에서 9x9 스도쿠 판(인쇄체 숫자 및 손글씨 포함)을 찾아 분석하세요.
 
                     반드시 아래 구조의 응답을 JSON 형식으로만 작성하세요 (다른 일반 텍스트 제외):
                     {
@@ -255,7 +269,7 @@ with tab1:
                     try:
                         response = client.models.generate_content(
                             model="gemini-2.5-pro",
-                            contents=[cropped_img, "이 스도쿠 판의 틀린 손글씨 위치와 바로 해결 가능한 단 하나의 힌트를 JSON으로 출력하세요."],
+                            contents=[target_img, "이 스도쿠 판의 틀린 손글씨 위치와 바로 해결 가능한 단 하나의 힌트를 JSON으로 출력하세요."],
                             config=types.GenerateContentConfig(
                                 system_instruction=system_prompt,
                                 temperature=0.1,
@@ -272,7 +286,7 @@ with tab1:
                         # 1. 틀린 숫자가 있는 경우 Red X 표시
                         if errors:
                             st.error(f"⚠️ **검증 결과:** 손글씨 중 틀린 부분이 {len(errors)}곳 발견되었습니다!")
-                            annotated_image = draw_errors_on_image(cropped_img, errors)
+                            annotated_image = draw_errors_on_image(target_img, errors)
                             st.image(annotated_image, caption="❌ 틀린 위치가 빨간색 X로 표시되었습니다", use_container_width=True)
                             
                             for err in errors:
@@ -293,7 +307,7 @@ with tab1:
                         st.error(f"분석 중 오류가 발생했습니다: {e}")
 
 # ==============================================================================
-# TAB 2: 스도쿠 문제 만들기 & 저장된 데이터 보관함 (정답 보기 옵션 추가)
+# TAB 2: 스도쿠 문제 만들기 & 저장된 데이터 보관함
 # ==============================================================================
 with tab2:
     st.subheader("🎲 난이도별 스도쿠 문제 생성")
@@ -316,8 +330,6 @@ with tab2:
 
     if "current_puzzle" in st.session_state:
         st.write(f"### 📋 생성된 문제 ({st.session_state['current_diff']})")
-        
-        # 정답 보기 토글 스위치
         show_sol = st.toggle("🔍 정답 보기 (파란색 빈칸 채우기)", key="gen_sol_toggle")
         
         pz = st.session_state["current_puzzle"]
@@ -340,10 +352,7 @@ with tab2:
         p_data = next(p for p in saved_puzzles if p["id"] == selected_id)
         pz_saved = p_data["puzzle"]
         
-        # 이전 저장 파일에 solution이 없더라도 백트래킹 알고리즘으로 자동 풀이
         sol_saved = p_data.get("solution") or solve_sudoku_exact(pz_saved)
-        
-        # 저장된 문제용 정답 보기 토글 스위치
         show_saved_sol = st.toggle("🔍 저장된 문제 정답 보기", key="saved_sol_toggle")
         
         sol_param = sol_saved if show_saved_sol else None
