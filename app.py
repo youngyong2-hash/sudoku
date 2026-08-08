@@ -23,7 +23,7 @@ if not api_key:
 client = genai.Client(api_key=api_key)
 
 # ------------------------------------------------------------------------------
-# 2. 유틸리티 함수 (스도쿠 생성기, 데이터 저장, 이미지 처리)
+# 2. 유틸리티 함수 (스도쿠 생성기, 데이터 저장, 이미지 처리, 9x9 표 시각화)
 # ------------------------------------------------------------------------------
 PUZZLE_FILE = "puzzles_db.json"
 
@@ -86,6 +86,58 @@ def load_puzzles():
         except:
             return []
     return []
+
+def render_sudoku_board_html(puzzle):
+    """9x9 스도쿠 판을 굵은 3x3 경계선이 있는 HTML 표로 렌더링"""
+    html = """
+    <style>
+        .sudoku-container {
+            display: flex;
+            justify-content: center;
+            margin: 15px 0;
+        }
+        .sudoku-board {
+            border-collapse: collapse;
+            border: 3px solid #222222;
+            background-color: #ffffff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        .sudoku-board td {
+            width: 38px;
+            height: 38px;
+            text-align: center;
+            vertical-align: middle;
+            border: 1px solid #cccccc;
+            font-size: 20px;
+            font-weight: bold;
+            color: #111111;
+        }
+        /* 3x3 구역 구분선 굵게 지정 */
+        .sudoku-board tr:nth-child(3n) td {
+            border-bottom: 2px solid #222222;
+        }
+        .sudoku-board td:nth-child(3n) {
+            border-right: 2px solid #222222;
+        }
+        .sudoku-board tr:first-child td {
+            border-top: 2px solid #222222;
+        }
+        .sudoku-board td:first-child {
+            border-left: 2px solid #222222;
+        }
+    </style>
+    <div class="sudoku-container">
+    <table class="sudoku-board">
+    """
+    for r in range(9):
+        html += "<tr>"
+        for c in range(9):
+            val = puzzle[r][c]
+            val_str = str(val) if val != 0 else ""
+            html += f"<td>{val_str}</td>"
+        html += "</tr>"
+    html += "</table></div>"
+    return html
 
 def draw_errors_on_image(image, error_cells):
     """틀린 손글씨 위치(행, 열)에 빨간색 X 표시를 그리는 함수"""
@@ -234,13 +286,8 @@ with tab2:
     if "current_puzzle" in st.session_state:
         st.write(f"### 📋 생성된 문제 ({st.session_state['current_diff']})")
         pz = st.session_state["current_puzzle"]
-        
-        # 9x9 텍스트 출력 형태
-        grid_text = ""
-        for r in range(9):
-            row_str = " ".join([str(pz[r][c]) if pz[r][c] != 0 else "." for c in range(9)])
-            grid_text += f"{row_str}\n"
-        st.code(grid_text, language="text")
+        # HTML 9x9 표 형식 출력
+        st.markdown(render_sudoku_board_html(pz), unsafe_allow_html=True)
 
     st.markdown("---")
     st.subheader("📁 저장된 문제 보관함")
@@ -255,12 +302,9 @@ with tab2:
         )
 
         p_data = next(p for p in saved_puzzles if p["id"] == selected_id)
-        
         pz_saved = p_data["puzzle"]
-        grid_saved_text = ""
-        for r in range(9):
-            row_str = " ".join([str(pz_saved[r][c]) if pz_saved[r][c] != 0 else "." for c in range(9)])
-            grid_saved_text += f"{row_str}\n"
-        st.code(grid_saved_text, language="text")
+        
+        # 저장된 문제도 HTML 9x9 표 형식으로 출력
+        st.markdown(render_sudoku_board_html(pz_saved), unsafe_allow_html=True)
     else:
         st.info("아직 저장된 스도쿠 문제가 없습니다. 위에서 문제를 생성해 보세요!")
