@@ -4,3 +4,5 @@ streamlit-cropperjs
 google-genai
 pydantic
 reportlab
+gspread
+google-auth
