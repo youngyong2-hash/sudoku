@@ -7,8 +7,9 @@ import datetime
 from typing import Literal, Optional
 
 import streamlit as st
+import pandas as pd
 from PIL import Image, ImageDraw, ImageOps, ImageFont
-from streamlit_cropper import st_cropper
+from streamlit_cropperjs import st_cropperjs
 from google import genai
 from google.genai import types
 from google.genai import errors as genai_errors
@@ -26,9 +27,23 @@ st.set_page_config(page_title="스도쿠 AI 도우미", page_icon="🧩", layout
 st.markdown(
     """
     <style>
+        html { scroll-behavior: smooth; }
         .stApp { max-width: 100%; padding-left: 0.5rem; padding-right: 0.5rem; }
         iframe { max-width: 100% !important; width: 100% !important; }
         img { max-width: 100% !important; height: auto !important; }
+        .home-button-wrap { text-align: center; margin: 20px 0 8px 0; }
+        .home-button-wrap a { text-decoration: none; }
+        .home-button-wrap button {
+            width: 100%;
+            padding: 12px 20px;
+            border-radius: 10px;
+            border: 1px solid rgba(0,0,0,0.15);
+            background: #f7f6f2;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .home-button-wrap button:hover { background: #edeae5; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -36,8 +51,7 @@ st.markdown(
 
 PUZZLE_FILE = "puzzles_db.json"
 
-# 2026년 8월 기준 Gemini 2.x Flash 계열은 신규 사용자에게 404(NOT_FOUND)를 반환할 수 있으므로
-# 사용하지 않는다. 아래 3.x Flash 계열만 순서대로 시도한다.
+# gemini-2.5-* 계열은 신규 사용자에게 404(NOT_FOUND)가 발생할 수 있으므로 절대 사용하지 않는다.
 MODEL_CANDIDATES = [
     "gemini-3.5-flash-lite",
     "gemini-3.5-flash",
@@ -45,26 +59,20 @@ MODEL_CANDIDATES = [
 ]
 
 
+def render_home_button(key_suffix: str):
+    """결과/PDF 화면 아래에 배치하는, 새로고침 없이 맨 위로 이동하는 홈 버튼."""
+    st.markdown(
+        f'<div class="home-button-wrap"><a href="#app-top"><button type="button">'
+        f"🏠 처음 화면으로 돌아가기</button></a></div>",
+        unsafe_allow_html=True,
+    )
+
+
 # ------------------------------------------------------------------------------
-# 2. Gemini response schema
+# 2. Gemini response schema (OCR 전용 — 정답 판정/힌트는 로컬 알고리즘이 담당)
 # ------------------------------------------------------------------------------
-class SudokuError(BaseModel):
-    row: int = Field(ge=1, le=9)
-    col: int = Field(ge=1, le=9)
-    reason: str
-
-
-class SudokuHint(BaseModel):
-    row: int = Field(ge=1, le=9)
-    col: int = Field(ge=1, le=9)
-    number: int = Field(ge=1, le=9)
-    reason: str
-
-
-class SudokuAnalysis(BaseModel):
-    mode: Literal["check_answer", "help"]
-    errors: list[SudokuError] = Field(default_factory=list)
-    single_hint: Optional[SudokuHint] = None
+class SudokuGridResult(BaseModel):
+    grid: list[list[int]] = Field(description="9x9 정수 배열. 빈칸은 0.")
     message: str = ""
 
 
@@ -92,8 +100,7 @@ def image_hash(image: Image.Image) -> str:
 
 
 def uploaded_file_hash(uploaded_file) -> str:
-    data = uploaded_file.getvalue()
-    return hashlib.sha256(data).hexdigest()
+    return hashlib.sha256(uploaded_file.getvalue()).hexdigest()
 
 
 def resize_image(image: Image.Image, max_dim: int) -> Image.Image:
@@ -135,7 +142,6 @@ def save_puzzle(difficulty, puzzle, solution):
             "created_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
     )
-
     temp_file = f"{PUZZLE_FILE}.tmp"
     try:
         with open(temp_file, "w", encoding="utf-8") as file:
@@ -148,7 +154,7 @@ def save_puzzle(difficulty, puzzle, solution):
 
 
 # ------------------------------------------------------------------------------
-# 4. Sudoku algorithms
+# 4. Sudoku algorithms (생성/검증/힌트 — 전부 로컬 계산, AI 미사용)
 # ------------------------------------------------------------------------------
 def is_valid(board, row, col, number):
     for index in range(9):
@@ -233,6 +239,98 @@ def generate_sudoku_puzzle(difficulty):
             puzzle[row][col] = previous
 
     return puzzle, full_board
+
+
+def find_candidates(board, row, col):
+    candidates = set(range(1, 10))
+    for i in range(9):
+        candidates.discard(board[row][i])
+        candidates.discard(board[i][col])
+    box_row, box_col = 3 * (row // 3), 3 * (col // 3)
+    for r in range(box_row, box_row + 3):
+        for c in range(box_col, box_col + 3):
+            candidates.discard(board[r][c])
+    return candidates
+
+
+def find_rule_violations(board):
+    conflict_cells = set()
+
+    for r in range(9):
+        seen = {}
+        for c in range(9):
+            value = board[r][c]
+            if value:
+                seen.setdefault(value, []).append(c)
+        for value, cols in seen.items():
+            if len(cols) > 1:
+                conflict_cells.update((r, c) for c in cols)
+
+    for c in range(9):
+        seen = {}
+        for r in range(9):
+            value = board[r][c]
+            if value:
+                seen.setdefault(value, []).append(r)
+        for value, rows in seen.items():
+            if len(rows) > 1:
+                conflict_cells.update((r, c) for r in rows)
+
+    for box_row in range(0, 9, 3):
+        for box_col in range(0, 9, 3):
+            seen = {}
+            for r in range(box_row, box_row + 3):
+                for c in range(box_col, box_col + 3):
+                    value = board[r][c]
+                    if value:
+                        seen.setdefault(value, []).append((r, c))
+            for value, cells in seen.items():
+                if len(cells) > 1:
+                    conflict_cells.update(cells)
+
+    violations = [
+        {
+            "row": r + 1,
+            "col": c + 1,
+            "reason": f"숫자 {board[r][c]}가 같은 행·열·3x3 박스 안에서 중복됩니다.",
+        }
+        for r, c in conflict_cells
+    ]
+    return sorted(violations, key=lambda item: (item["row"], item["col"]))
+
+
+def find_naked_single_hint(board):
+    for r in range(9):
+        for c in range(9):
+            if board[r][c] == 0:
+                candidates = find_candidates(board, r, c)
+                if len(candidates) == 1:
+                    value = next(iter(candidates))
+                    return {
+                        "row": r + 1,
+                        "col": c + 1,
+                        "number": value,
+                        "reason": f"{r + 1}행 {c + 1}열은 같은 행·열·3x3 박스 규칙상 {value}만 들어갈 수 있습니다.",
+                        "certain": True,
+                    }
+    return None
+
+
+def find_fallback_hint(board):
+    solved = solve_sudoku_exact(board)
+    if not solved:
+        return None
+    for r in range(9):
+        for c in range(9):
+            if board[r][c] == 0:
+                return {
+                    "row": r + 1,
+                    "col": c + 1,
+                    "number": solved[r][c],
+                    "reason": "지금 상태만으로는 값이 유일하게 결정되지 않지만, 이 값을 넣으면 끝까지 풀 수 있는 예시입니다.",
+                    "certain": False,
+                }
+    return None
 
 
 # ------------------------------------------------------------------------------
@@ -331,7 +429,6 @@ def image_to_png_bytes(image):
 
 
 def generate_sudoku_print_pdf(puzzle, print_date, difficulty=""):
-    """A4 용지에 제목(Daily Sudoku Puzzle), 날짜, 가운데 정렬된 스도쿠 판을 그려 인쇄용 PDF 바이트를 반환한다."""
     buffer = io.BytesIO()
     page_width, page_height = A4
     pdf = canvas.Canvas(buffer, pagesize=A4)
@@ -380,52 +477,20 @@ def generate_sudoku_print_pdf(puzzle, print_date, difficulty=""):
     return buffer.getvalue()
 
 
-def draw_errors_on_image(image, error_cells):
-    annotated = image.copy().convert("RGB")
-    draw = ImageDraw.Draw(annotated)
-    width, height = annotated.size
-    cell_w, cell_h = width / 9.0, height / 9.0
-
-    for item in error_cells:
-        row, col = item.get("row", 0), item.get("col", 0)
-        if 1 <= row <= 9 and 1 <= col <= 9:
-            row_idx, col_idx = row - 1, col - 1
-            x1 = col_idx * cell_w + cell_w * 0.15
-            y1 = row_idx * cell_h + cell_h * 0.15
-            x2 = (col_idx + 1) * cell_w - cell_w * 0.15
-            y2 = (row_idx + 1) * cell_h - cell_h * 0.15
-            stroke = max(3, int(width / 80))
-            draw.line([(x1, y1), (x2, y2)], fill="red", width=stroke)
-            draw.line([(x1, y2), (x2, y1)], fill="red", width=stroke)
-    return annotated
-
-
 # ------------------------------------------------------------------------------
-# 6. Gemini analysis (automatic model fallback avoids 404 errors)
+# 6. Gemini OCR (숫자 판독 전용 — 정답/힌트 로직은 로컬 알고리즘이 담당)
 # ------------------------------------------------------------------------------
-SYSTEM_PROMPT = """
-당신은 엄격하고 명확한 스도쿠 검증 튜터입니다.
-업로드된 이미지에서 9x9 스도쿠 판(인쇄체 및 손글씨)을 분석합니다.
+SYSTEM_PROMPT_OCR = """
+당신은 이미지 속 9x9 스도쿠 판의 숫자를 정확히 판독하는 OCR 전문가입니다.
+인쇄체 숫자와 손글씨 숫자를 모두 인식합니다.
+숫자가 없거나 흐릿해서 판단할 수 없는 칸은 반드시 0으로 표시합니다.
+추측하지 말고, 명확히 보이는 숫자만 인식하세요.
 
-먼저 9x9 모든 칸이 숫자로 채워졌는지 판단하세요. 숫자가 불분명한 칸은 빈칸으로 간주합니다.
-
-분기 규칙:
-1. 모든 칸이 채워진 완성판이면 mode를 check_answer로 설정합니다.
-   - 스도쿠 전체 정답을 검증합니다.
-   - 틀린 숫자의 위치를 errors에 모두 기록합니다.
-   - 정답이면 errors는 빈 배열입니다.
-   - single_hint는 null입니다.
-2. 하나라도 빈칸이 있으면 mode를 help로 설정합니다.
-   - 현재 적힌 숫자 중 스도쿠 규칙에 위배되는 숫자를 errors에 기록합니다.
-   - 빈칸 중 논리적으로 확실히 채울 수 있는 칸이 있으면 single_hint에 단 한 칸만 제시합니다.
-   - 확실한 한 칸 힌트가 없으면 single_hint는 null입니다.
-
-행과 열은 항상 1~9 정수로 반환합니다. reason과 message는 한국어로 간결하게 작성합니다.
+반드시 9개의 행으로 구성되고, 각 행은 9개의 정수(0~9)로 구성된 grid만 반환하세요.
 """
 
 
-def analyze_sudoku(client, image):
-    """MODEL_CANDIDATES를 순서대로 시도해 404(모델 미제공) 오류에도 자동으로 복구한다."""
+def ocr_sudoku_grid(client, image):
     last_error = None
 
     for model_name in MODEL_CANDIDATES:
@@ -434,20 +499,28 @@ def analyze_sudoku(client, image):
                 model=model_name,
                 contents=[
                     image,
-                    "이미지의 스도쿠를 판독하고, 완성 여부에 따라 정답 확인 또는 풀이 도움 결과를 반환하세요.",
+                    "이 이미지 속 9x9 스도쿠 판의 숫자를 정확히 읽어 grid로 반환하세요. 빈칸은 0입니다.",
                 ],
                 config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT,
-                    temperature=0.1,
+                    system_instruction=SYSTEM_PROMPT_OCR,
+                    temperature=0.0,
                     response_mime_type="application/json",
-                    response_schema=SudokuAnalysis,
-                    max_output_tokens=500,
+                    response_schema=SudokuGridResult,
+                    max_output_tokens=400,
                 ),
             )
             if not response or not response.text:
                 raise ValueError("Gemini가 빈 응답을 반환했습니다.")
-            parsed = SudokuAnalysis.model_validate_json(response.text).model_dump()
-            return parsed, model_name
+
+            parsed = SudokuGridResult.model_validate_json(response.text)
+            fixed_grid = [[0] * 9 for _ in range(9)]
+            for r in range(min(9, len(parsed.grid))):
+                row = parsed.grid[r]
+                for c in range(min(9, len(row))):
+                    value = row[c]
+                    fixed_grid[r][c] = value if isinstance(value, int) and 0 <= value <= 9 else 0
+            return fixed_grid, model_name
+
         except genai_errors.ClientError as error:
             last_error = error
             if getattr(error, "code", None) == 404 or "NOT_FOUND" in str(error):
@@ -457,18 +530,18 @@ def analyze_sudoku(client, image):
             last_error = error
             continue
 
-    raise RuntimeError(f"사용 가능한 Gemini 모델을 찾지 못했습니다: {last_error}")
+    raise RuntimeError(f"판독 가능한 Gemini 모델을 찾지 못했습니다: {last_error}")
 
 
-def clear_analysis():
-    st.session_state.pop("ai_analysis_result", None)
-    st.session_state.pop("cropped_img_for_display", None)
-    st.session_state.pop("ai_used_model", None)
+def clear_ocr_state():
+    for key in ("ocr_grid", "ocr_result", "ocr_used_model"):
+        st.session_state.pop(key, None)
 
 
 # ------------------------------------------------------------------------------
 # 7. Main UI
 # ------------------------------------------------------------------------------
+st.markdown('<div id="app-top"></div>', unsafe_allow_html=True)
 st.title("🧩 스도쿠 AI 스마트 도우미")
 
 api_key = get_api_key()
@@ -480,7 +553,7 @@ client = get_gemini_client(api_key)
 tab1, tab2 = st.tabs(["📸 이미지 업로드 & 도움받기", "🎲 문제 만들기 & 보관함"])
 
 # ==============================================================================
-# TAB 1
+# TAB 1 — 사진 업로드 → 확대/축소로 맞추기 → OCR 판독 → 사람이 확인/수정 → 로컬 검증
 # ==============================================================================
 with tab1:
     st.subheader("1. 스도쿠 이미지 가져오기")
@@ -490,124 +563,153 @@ with tab1:
         current_upload_hash = uploaded_file_hash(img_file)
         if st.session_state.get("last_uploaded_hash") != current_upload_hash:
             st.session_state["last_uploaded_hash"] = current_upload_hash
-            st.session_state["rotate_angle"] = 0
             st.session_state.pop("last_crop_hash", None)
-            clear_analysis()
+            clear_ocr_state()
 
-        try:
-            raw_image = Image.open(io.BytesIO(img_file.getvalue()))
-            working_img = resize_image(raw_image, max_dim=768)
-        except (OSError, ValueError) as error:
-            st.error(f"이미지를 열 수 없습니다. JPG 또는 PNG 파일을 확인해 주세요: {error}")
-            st.stop()
+        st.subheader("2. 9×9 영역에 맞추기")
+        st.caption(
+            "📱 가운데 고정된 사각 박스 안에 스도쿠 판이 들어오도록, "
+            "손가락으로 사진을 확대·축소하고 움직여서 맞춘 뒤 잘라내기 버튼을 눌러주세요."
+        )
 
-        st.session_state.setdefault("rotate_angle", 0)
-        st.subheader("2. 사진 방향 및 영역 설정")
-        rotate_col, reset_col = st.columns(2)
-        with rotate_col:
-            if st.button("🔄 90° 회전"):
-                st.session_state["rotate_angle"] = (st.session_state["rotate_angle"] - 90) % 360
-                clear_analysis()
-        with reset_col:
-            if st.button("↩️ 방향 초기화"):
-                st.session_state["rotate_angle"] = 0
-                clear_analysis()
+        cropped_bytes = st_cropperjs(
+            pic=img_file.getvalue(),
+            btn_text="✅ 이 영역으로 잘라내기",
+            key="mobile_cropperjs",
+        )
 
-        if st.session_state["rotate_angle"]:
-            working_img = working_img.rotate(st.session_state["rotate_angle"], expand=True)
+        if cropped_bytes:
+            try:
+                target_img = Image.open(io.BytesIO(cropped_bytes)).convert("RGB")
+                target_img = resize_image(target_img, max_dim=768)
+            except (OSError, ValueError) as error:
+                st.error(f"잘라낸 이미지를 불러올 수 없습니다: {error}")
+                target_img = None
 
-        use_cropper = st.checkbox("✂️ 빨간 박스로 9×9 영역 잘라내기", value=True)
-        if st.session_state.get("last_use_cropper") != use_cropper:
-            st.session_state["last_use_cropper"] = use_cropper
-            clear_analysis()
+            if target_img is not None:
+                crop_hash = image_hash(target_img)
+                if st.session_state.get("last_crop_hash") != crop_hash:
+                    st.session_state["last_crop_hash"] = crop_hash
+                    clear_ocr_state()
 
-        target_img = working_img
-        if use_cropper:
-            st.write("📱 모서리를 조절해 9×9 스도쿠 영역에 맞추세요.")
-            target_img = st_cropper(
-                working_img,
-                realtime_update=True,
-                box_color="#FF0000",
-                aspect_ratio=(1, 1),
-                key="cropper_widget",
-            )
+                st.image(target_img, caption="최종 분석 영역", use_container_width=True)
 
-        if target_img is not None:
-            crop_hash = image_hash(target_img)
-            if st.session_state.get("last_crop_hash") != crop_hash:
-                st.session_state["last_crop_hash"] = crop_hash
-                clear_analysis()
+                if st.button("🔎 손글씨 판독하기", type="primary", use_container_width=True):
+                    with st.spinner("Gemini AI가 스도쿠 숫자를 읽고 있습니다..."):
+                        try:
+                            grid, used_model = ocr_sudoku_grid(client, target_img)
+                            st.session_state["ocr_grid"] = grid
+                            st.session_state["ocr_used_model"] = used_model
+                            st.session_state.pop("ocr_result", None)
+                        except Exception as error:
+                            st.error(f"판독 중 오류가 발생했습니다: {error}")
 
-            st.image(target_img, caption="최종 분석 영역", use_container_width=True)
+                if "ocr_grid" in st.session_state:
+                    st.markdown("---")
+                    st.subheader("3. AI 판독 결과 확인 및 수정")
+                    st.caption(
+                        "AI가 읽은 숫자가 아래 표에 채워져 있습니다. "
+                        "손글씨를 잘못 읽은 칸이 있다면 표를 직접 눌러 수정하세요. 빈칸은 비워두면 됩니다."
+                    )
 
-            if st.button("💡 판독 후 정답확인 또는 도움받기", type="primary"):
-                with st.spinner("Gemini AI가 스도쿠를 분석하고 있습니다..."):
-                    try:
-                        result, used_model = analyze_sudoku(client, target_img)
-                        st.session_state["ai_analysis_result"] = result
-                        st.session_state["cropped_img_for_display"] = target_img.copy()
-                        st.session_state["ai_used_model"] = used_model
-                    except Exception as error:
-                        st.error(f"AI 분석 중 오류가 발생했습니다: {error}")
+                    editor_key = f"grid_editor_{st.session_state.get('last_crop_hash', 'default')}"
+                    grid_df = pd.DataFrame(
+                        st.session_state["ocr_grid"],
+                        columns=[str(i) for i in range(1, 10)],
+                    ).replace(0, pd.NA)
 
-            if "ai_analysis_result" in st.session_state and "cropped_img_for_display" in st.session_state:
-                result = st.session_state["ai_analysis_result"]
-                saved_img = st.session_state["cropped_img_for_display"]
-                errors = result.get("errors", [])
-                hint = result.get("single_hint")
-                mode = result.get("mode", "help")
-                message = result.get("message", "")
-                st.markdown("---")
+                    edited_df = st.data_editor(
+                        grid_df,
+                        hide_index=True,
+                        use_container_width=True,
+                        column_config={
+                            col: st.column_config.NumberColumn(col, min_value=1, max_value=9, step=1)
+                            for col in grid_df.columns
+                        },
+                        key=editor_key,
+                    )
 
-                if mode == "check_answer":
-                    st.subheader("📝 정답 확인 결과")
-                    if errors:
-                        st.error(f"❌ 정답이 아닙니다. 틀린 숫자가 {len(errors)}곳 있습니다.")
-                        st.image(
-                            draw_errors_on_image(saved_img, errors),
-                            caption="❌ 틀린 위치가 빨간색 X로 표시되었습니다",
-                            use_container_width=True,
+                    used_model = st.session_state.get("ocr_used_model")
+                    if used_model:
+                        st.caption(f"판독에 사용된 모델: {used_model}")
+
+                    action_col1, action_col2 = st.columns(2)
+                    with action_col1:
+                        confirmed = st.button(
+                            "✅ 이 상태로 정답확인 / 도움받기", type="primary", use_container_width=True
                         )
-                        for error in errors:
-                            st.write(f"- **{error.get('row')}행 {error.get('col')}열**: {error.get('reason')}")
-                    else:
-                        st.balloons()
-                        st.success("🎉 축하합니다! 스도쿠를 정확히 완성했습니다.")
-                    if message:
-                        st.caption(message)
+                    with action_col2:
+                        if st.button("🔁 판독 다시 하기", use_container_width=True):
+                            clear_ocr_state()
+                            st.rerun()
 
-                else:
-                    st.subheader("💡 풀이 도움 결과")
-                    if errors:
-                        st.error(f"⚠️ 현재 입력 중 규칙에 맞지 않는 숫자가 {len(errors)}곳 있습니다.")
-                        st.image(
-                            draw_errors_on_image(saved_img, errors),
-                            caption="❌ 규칙에 맞지 않는 위치가 빨간색 X로 표시되었습니다",
-                            use_container_width=True,
+                    if confirmed:
+                        edited_grid = edited_df.fillna(0).astype(int).values.tolist()
+                        violations = find_rule_violations(edited_grid)
+                        is_complete = all(
+                            edited_grid[r][c] != 0 for r in range(9) for c in range(9)
                         )
-                        for error in errors:
-                            st.write(f"- **{error.get('row')}행 {error.get('col')}열**: {error.get('reason')}")
-                    else:
-                        st.success("✅ 현재 입력된 숫자에는 규칙상 문제가 없습니다.")
+                        st.session_state["ocr_result"] = {
+                            "grid": edited_grid,
+                            "violations": violations,
+                            "is_complete": is_complete,
+                        }
 
-                    if hint:
-                        st.subheader("💡 바로 해결 가능한 한 칸 힌트")
-                        st.info(
-                            f"👉 **위치:** {hint.get('row')}행 {hint.get('col')}열\n\n"
-                            f"👉 **넣을 숫자:** {hint.get('number')}\n\n"
-                            f"👉 **풀이 이유:** {hint.get('reason')}"
-                        )
-                    else:
-                        st.warning("현재 상태에서는 바로 확정할 수 있는 한 칸을 찾지 못했습니다.")
-                    if message:
-                        st.caption(message)
+                    if "ocr_result" in st.session_state:
+                        result = st.session_state["ocr_result"]
+                        grid = result["grid"]
+                        violations = result["violations"]
+                        is_complete = result["is_complete"]
 
-                used_model = st.session_state.get("ai_used_model")
-                if used_model:
-                    st.caption(f"사용된 모델: {used_model}")
+                        st.markdown("---")
+                        st.subheader("4. 결과")
+
+                        if violations:
+                            st.error(f"⚠️ 확인 결과, 규칙에 어긋나는 칸이 {len(violations)}곳 있습니다.")
+                            for violation in violations:
+                                st.write(
+                                    f"- **{violation['row']}행 {violation['col']}열**: {violation['reason']}"
+                                )
+                            st.caption("표에서 잘못 읽힌 숫자가 없는지 다시 한번 확인해 보세요.")
+
+                        elif is_complete:
+                            st.balloons()
+                            st.success("🎉 정답입니다! 스도쿠를 정확히 완성했습니다.")
+
+                        else:
+                            st.success("✅ 현재까지 입력된 숫자에는 규칙 위반이 없습니다.")
+
+                            hint = find_naked_single_hint(grid)
+                            if not hint:
+                                hint = find_fallback_hint(grid)
+
+                            if hint:
+                                st.subheader("💡 힌트")
+                                if hint["certain"]:
+                                    st.info(
+                                        f"👉 **위치:** {hint['row']}행 {hint['col']}열\n\n"
+                                        f"👉 **넣을 숫자:** {hint['number']}\n\n"
+                                        f"👉 **풀이 이유:** {hint['reason']}"
+                                    )
+                                else:
+                                    st.warning(
+                                        f"👉 **위치:** {hint['row']}행 {hint['col']}열\n\n"
+                                        f"👉 **예시 값:** {hint['number']}\n\n"
+                                        f"👉 {hint['reason']}"
+                                    )
+                            else:
+                                st.warning(
+                                    "현재 입력 상태로는 힌트를 계산할 수 없습니다. "
+                                    "일부 숫자가 잘못 판독되었을 수 있으니 표를 다시 확인해 주세요."
+                                )
+
+                        # 결과 화면 맨 아래 — 처음 화면으로 돌아가는 버튼
+                        render_home_button("tab1_result")
+        else:
+            st.info("사진을 확대·축소·이동해 스도쿠 9×9 영역에 맞춘 뒤, 위 버튼으로 잘라내기를 완료하세요.")
 
 # ==============================================================================
-# TAB 2
+# TAB 2 — 문제 만들기 & 보관함 (순수 로컬 작동)
 # ==============================================================================
 with tab2:
     st.subheader("🎲 난이도별 스도쿠 문제 생성")
@@ -628,7 +730,6 @@ with tab2:
         st.session_state["current_diff"] = difficulty
         st.success(f"새로운 {difficulty} 문제가 생성되어 보관함에 저장되었습니다!")
 
-    # 탭을 처음 열었을 때도 인쇄용 PDF/PNG 섹션이 바로 보이도록 기본 문제를 자동 생성한다.
     if "current_puzzle" not in st.session_state:
         auto_puzzle, auto_solution = generate_sudoku_puzzle("중급")
         st.session_state["current_puzzle"] = auto_puzzle
@@ -676,6 +777,9 @@ with tab2:
         use_container_width=True,
         key="gen_pdf_download",
     )
+
+    # 생성된 문제 섹션 맨 아래 — 처음 화면으로 돌아가는 버튼
+    render_home_button("tab2_generated")
 
     st.markdown("---")
     st.subheader("📁 저장된 문제 보관함")
@@ -739,5 +843,8 @@ with tab2:
             use_container_width=True,
             key="saved_pdf_download",
         )
+
+        # 저장된 문제 섹션 맨 아래 — 처음 화면으로 돌아가는 버튼
+        render_home_button("tab2_saved")
     else:
         st.info("선택한 난이도에 저장된 스도쿠 문제가 없습니다. 위에서 새 문제를 만들어 보세요!")
