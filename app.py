@@ -5,6 +5,7 @@ import random
 import hashlib
 import datetime as dt
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont, ImageOps
