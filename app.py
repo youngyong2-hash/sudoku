@@ -937,39 +937,38 @@ with tab_manual:
         if "manual_ai_grid" in st.session_state:
             st.markdown("---")
             st.markdown("### 🔧 AI가 읽은 결과를 확인하고 오류를 고쳐주세요")
-            st.caption("AI가 잘못 읽은 줄이 있으면 그 줄만 수정한 뒤 저장하세요. 한 줄 9자리, 빈칸은 0입니다.")
+            st.caption("사진과 대조하면서 잘못 읽은 칸만 고치세요. 빈칸은 0입니다.")
 
             ai_grid = st.session_state["manual_ai_grid"]
+            corrected_cells = [[0] * 9 for _ in range(9)]
 
-            corrected_row_texts = []
             for row in range(9):
-                default_text = "".join(str(digit) for digit in ai_grid[row])
-                corrected_row_texts.append(
-                    st.text_input(
-                        f"{row + 1}행",
-                        value=default_text,
-                        max_chars=9,
-                        key=f"manual_photo_row_{row}"
+                cols = st.columns(9)
+                for col in range(9):
+                    corrected_cells[row][col] = cols[col].number_input(
+                        label=" ",
+                        min_value=0,
+                        max_value=9,
+                        value=int(ai_grid[row][col]),
+                        step=1,
+                        key=f"manual_photo_cell_{row}_{col}",
+                        label_visibility="collapsed",
                     )
-                )
 
             if st.button("🔎 검증 후 보관함에 저장", type="primary", key="manual_photo_save"):
-                board, parse_error = parse_row_strings(corrected_row_texts)
+                board = parse_manual_board(corrected_cells)
+                error_message, solution = validate_manual_board(board)
 
-                if parse_error:
-                    st.error(parse_error)
+                if error_message:
+                    st.error(error_message)
                 else:
-                    error_message, solution = validate_manual_board(board)
-                    if error_message:
-                        st.error(error_message)
-                    else:
-                        try:
-                            save_puzzle(manual_difficulty, board, solution, source="사진인식")
-                            st.success("검증을 통과했고, 보관함에 저장했습니다.")
-                            st.markdown(render_board(board, solution), unsafe_allow_html=True)
-                            st.session_state.pop("manual_ai_grid", None)
-                        except Exception as error:
-                            st.warning(f"저장에 실패했습니다: {error}")
+                    try:
+                        save_puzzle(manual_difficulty, board, solution, source="사진인식")
+                        st.success("검증을 통과했고, 보관함에 저장했습니다.")
+                        st.markdown(render_board(board, solution), unsafe_allow_html=True)
+                        st.session_state.pop("manual_ai_grid", None)
+                    except Exception as error:
+                        st.warning(f"저장에 실패했습니다: {error}")
                             
 # =============================================================================
 # 탭 4: 문제 풀이 (보관함 → 인쇄 → 채점 → 정답 표시)
