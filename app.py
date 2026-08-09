@@ -496,7 +496,7 @@ def make_pdf(board, date_value, difficulty):
 
     # 문제 숫자
     pdf.setFillColor(HexColor("#111111"))
-    pdf.setFont("Helvetica-Bold", 13)
+    pdf.setFont("Helvetica-Bold", 15)
 
     for row in range(9):
         for col in range(9):
