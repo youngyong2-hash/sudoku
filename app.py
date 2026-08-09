@@ -330,10 +330,7 @@ def puzzle_pdf(board, date_value, difficulty):
     for index in range(difficulty_count):
     square_x = start_x + index * (square_size + square_gap)
 
-    pdf.roundRect( square_x,square_y,square_size,square_size,1.2 * mm,
-        stroke=0,
-        fill=1,
-    )
+    pdf.roundRect( square_x,square_y,square_size,square_size,1.2 * mm, stroke=0, fill=1,)
 
     # 스도쿠 격자
     pdf.setStrokeColor(HexColor("#111111"))
