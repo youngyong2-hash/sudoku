@@ -21,7 +21,7 @@ from reportlab.pdfgen import canvas
 # ------------------------------------------------------------------------------
 # 1. App configuration
 # ------------------------------------------------------------------------------
-st.set_page_config(page_title="YOUNGYONG SUDOKU", page_icon="🧩", layout="centered")
+st.set_page_config(page_title="YOUNGYONG SUDOKU", page_icon="🏄", layout="centered")
 
 st.markdown(
     """
@@ -706,7 +706,7 @@ def parse_cell_value(raw: str) -> int:
 # 7. Main UI
 # ------------------------------------------------------------------------------
 st.markdown('<div id="app-top"></div>', unsafe_allow_html=True)
-st.markdown('<h1 class="app-title">🧩 YOUNGYONG SUDOKU</h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="app-title">🏄 YOUNGYONG SUDOKU</h1>', unsafe_allow_html=True)
 
 st.sidebar.caption(
     "☁️ 구글 드라이브에 저장 중입니다." if DRIVE_ENABLED
