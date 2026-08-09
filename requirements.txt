@@ -3,3 +3,4 @@ google-genai
 pillow
 streamlit-cropper
 fpdf2
+reportlab
