@@ -4,3 +4,4 @@ pillow
 streamlit-cropper
 fpdf2
 reportlab
+streamlit-cropperjs
