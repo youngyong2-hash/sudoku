@@ -414,7 +414,7 @@ def load_puzzles(difficulty=None):
     return items
 
 
-"""def save_puzzle(difficulty, puzzle, answer):
+def save_puzzle(difficulty, puzzle, answer):
     worksheet = get_worksheet()
     existing = load_puzzles()
     new_id = max([item["id"] for item in existing], default=0) + 1
@@ -430,7 +430,7 @@ def load_puzzles(difficulty=None):
         created_at,
     ])
 
-def load_puzzles(difficulty=None):
+"""def load_puzzles(difficulty=None):
     try:
         items = json.loads(DB_FILE.read_text(encoding="utf-8")) if DB_FILE.exists() else []
         return [item for item in items if item.get("difficulty") == difficulty] if difficulty else items
