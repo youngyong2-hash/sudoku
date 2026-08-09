@@ -31,6 +31,17 @@ st.markdown(
         iframe { max-width: 100% !important; width: 100% !important; }
         img { max-width: 100% !important; height: auto !important; }
 
+        /* 제목이 휴대폰 화면 폭에 맞춰 자동으로 축소되어 한 줄을 유지하도록 처리 */
+        .app-title {
+            font-size: clamp(1.15rem, 6.2vw, 2.4rem);
+            font-weight: 800;
+            letter-spacing: -0.02em;
+            white-space: nowrap;
+            overflow-x: hidden;
+            text-align: center;
+            margin: 0.25rem 0 0.75rem 0;
+        }
+
         .home-button-wrap { text-align: center; margin: 20px 0 8px 0; }
         .home-button-wrap a { text-decoration: none; }
         .home-button-wrap button {
@@ -45,14 +56,7 @@ st.markdown(
         }
         .home-button-wrap button:hover { background: #edeae5; }
 
-        /* ---------------------------------------------------------------
-           9x9 판독 결과 격자 스타일링
-           - 열 번호(헤더) 없음
-           - 셀 내부 텍스트 가운데 정렬
-           - 3행 단위 밴드마다 굵은 테두리 박스로 구분 (가로 3x3 분리 효과)
-           - 3열, 6열 뒤에 굵은 세로선 (세로 3x3 분리 효과)
-           - 휴대폰 폭에 맞게 셀 간격/여백 최소화
-        --------------------------------------------------------------- */
+        /* 9x9 판독 결과 격자 스타일링 */
         .st-key-sudoku_band_0,
         .st-key-sudoku_band_1,
         .st-key-sudoku_band_2 {
@@ -83,7 +87,6 @@ st.markdown(
             border: 1px solid #ccc !important;
             border-radius: 4px !important;
         }
-        /* 3열, 6열 뒤에 굵은 세로 구분선 */
         .st-key-sudoku_band_0 div[data-testid="stHorizontalBlock"] > div:nth-of-type(3) input,
         .st-key-sudoku_band_0 div[data-testid="stHorizontalBlock"] > div:nth-of-type(6) input,
         .st-key-sudoku_band_1 div[data-testid="stHorizontalBlock"] > div:nth-of-type(3) input,
@@ -97,14 +100,122 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-PUZZLE_FILE = "puzzles_db.json"
-
 # gemini-2.5-* 계열은 신규 사용자에게 404(NOT_FOUND)가 발생할 수 있으므로 절대 사용하지 않는다.
 MODEL_CANDIDATES = [
     "gemini-3.5-flash-lite",
     "gemini-3.5-flash",
     "gemini-3.1-flash-lite",
 ]
+
+LOCAL_PUZZLE_FILE = "puzzles_db.json"
+DRIVE_FILE_NAME = "puzzles_db.json"
+DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.file"]
+
+# secrets.toml에 [gcp_service_account]와 DRIVE_FOLDER_ID가 모두 설정되어 있으면
+# 구글 드라이브를 저장소로 사용하고, 없으면 로컬 JSON 파일로 자동 대체(fallback)한다.
+DRIVE_ENABLED = bool(st.secrets.get("gcp_service_account")) and bool(st.secrets.get("DRIVE_FOLDER_ID"))
+
+if DRIVE_ENABLED:
+    from google.oauth2 import service_account
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
+
+    DRIVE_FOLDER_ID = st.secrets["DRIVE_FOLDER_ID"]
+
+    @st.cache_resource
+    def get_drive_service():
+        info = dict(st.secrets["gcp_service_account"])
+        credentials = service_account.Credentials.from_service_account_info(info, scopes=DRIVE_SCOPES)
+        return build("drive", "v3", credentials=credentials, cache_discovery=False)
+
+    def _find_drive_file_id(service):
+        query = f"name='{DRIVE_FILE_NAME}' and '{DRIVE_FOLDER_ID}' in parents and trashed=false"
+        results = service.files().list(q=query, spaces="drive", fields="files(id, name)").execute()
+        files = results.get("files", [])
+        return files[0]["id"] if files else None
+
+    @st.cache_data(ttl=30, show_spinner=False)
+    def _load_puzzles_from_drive():
+        try:
+            service = get_drive_service()
+            file_id = _find_drive_file_id(service)
+            if not file_id:
+                return []
+            request = service.files().get_media(fileId=file_id)
+            buffer = io.BytesIO()
+            downloader = MediaIoBaseDownload(buffer, request)
+            done = False
+            while not done:
+                _, done = downloader.next_chunk()
+            buffer.seek(0)
+            data = json.loads(buffer.read().decode("utf-8"))
+            return data if isinstance(data, list) else []
+        except Exception as error:
+            st.warning(f"Google Drive에서 문제를 불러오지 못했습니다: {error}")
+            return []
+
+    def _save_puzzles_to_drive(puzzles):
+        service = get_drive_service()
+        file_id = _find_drive_file_id(service)
+        content = json.dumps(puzzles, ensure_ascii=False, indent=2).encode("utf-8")
+        media = MediaIoBaseUpload(io.BytesIO(content), mimetype="application/json", resumable=False)
+        if file_id:
+            service.files().update(fileId=file_id, media_body=media).execute()
+        else:
+            metadata = {"name": DRIVE_FILE_NAME, "parents": [DRIVE_FOLDER_ID]}
+            service.files().create(body=metadata, media_body=media, fields="id").execute()
+        _load_puzzles_from_drive.clear()
+
+
+def _load_puzzles_local():
+    if not os.path.exists(LOCAL_PUZZLE_FILE):
+        return []
+    try:
+        with open(LOCAL_PUZZLE_FILE, "r", encoding="utf-8") as file:
+            data = json.load(file)
+        return data if isinstance(data, list) else []
+    except (OSError, json.JSONDecodeError, ValueError):
+        return []
+
+
+def _save_puzzles_local(puzzles):
+    temp_file = f"{LOCAL_PUZZLE_FILE}.tmp"
+    try:
+        with open(temp_file, "w", encoding="utf-8") as file:
+            json.dump(puzzles, file, ensure_ascii=False, indent=2)
+        os.replace(temp_file, LOCAL_PUZZLE_FILE)
+    except OSError as error:
+        st.error(f"데이터 저장 중 오류가 발생했습니다: {error}")
+        if os.path.exists(temp_file):
+            os.remove(temp_file)
+
+
+def load_puzzles(difficulty=None):
+    puzzles = _load_puzzles_from_drive() if DRIVE_ENABLED else _load_puzzles_local()
+    if difficulty:
+        return [item for item in puzzles if item.get("difficulty") == difficulty]
+    return puzzles
+
+
+def save_puzzle(difficulty, puzzle, solution):
+    puzzles = load_puzzles()
+    next_id = max((item.get("id", 0) for item in puzzles), default=0) + 1
+    puzzles.append(
+        {
+            "id": next_id,
+            "difficulty": difficulty,
+            "puzzle": puzzle,
+            "solution": solution,
+            "created_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+    )
+    if DRIVE_ENABLED:
+        try:
+            _save_puzzles_to_drive(puzzles)
+        except Exception as error:
+            st.error(f"Google Drive 저장 중 오류가 발생했습니다: {error}")
+    else:
+        _save_puzzles_local(puzzles)
 
 
 def render_home_button(key_suffix: str):
@@ -136,7 +247,7 @@ def get_api_key():
 
 
 # ------------------------------------------------------------------------------
-# 3. Image and storage helpers
+# 3. Image helpers
 # ------------------------------------------------------------------------------
 def image_hash(image: Image.Image) -> str:
     normalized = image.convert("RGB")
@@ -160,44 +271,6 @@ def resize_image(image: Image.Image, max_dim: int) -> Image.Image:
         (max(1, int(width * ratio)), max(1, int(height * ratio))),
         Image.Resampling.LANCZOS,
     )
-
-
-def load_puzzles(difficulty=None):
-    if not os.path.exists(PUZZLE_FILE):
-        return []
-    try:
-        with open(PUZZLE_FILE, "r", encoding="utf-8") as file:
-            puzzles = json.load(file)
-        if not isinstance(puzzles, list):
-            return []
-        if difficulty:
-            return [item for item in puzzles if item.get("difficulty") == difficulty]
-        return puzzles
-    except (OSError, json.JSONDecodeError, ValueError):
-        return []
-
-
-def save_puzzle(difficulty, puzzle, solution):
-    puzzles = load_puzzles()
-    next_id = max((item.get("id", 0) for item in puzzles), default=0) + 1
-    puzzles.append(
-        {
-            "id": next_id,
-            "difficulty": difficulty,
-            "puzzle": puzzle,
-            "solution": solution,
-            "created_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        }
-    )
-    temp_file = f"{PUZZLE_FILE}.tmp"
-    try:
-        with open(temp_file, "w", encoding="utf-8") as file:
-            json.dump(puzzles, file, ensure_ascii=False, indent=2)
-        os.replace(temp_file, PUZZLE_FILE)
-    except OSError as error:
-        st.error(f"데이터 저장 중 오류가 발생했습니다: {error}")
-        if os.path.exists(temp_file):
-            os.remove(temp_file)
 
 
 # ------------------------------------------------------------------------------
@@ -594,7 +667,12 @@ def parse_cell_value(raw: str) -> int:
 # 7. Main UI
 # ------------------------------------------------------------------------------
 st.markdown('<div id="app-top"></div>', unsafe_allow_html=True)
-st.title("🏄 Miracle Morning SUDOKU")
+st.markdown('<h1 class="app-title">🏄 Miracle Morning SUDOKU <br> by youngyong</h1>', unsafe_allow_html=True)
+
+st.sidebar.caption(
+    "☁️ 구글 드라이브에 저장 중입니다." if DRIVE_ENABLED
+    else "💾 로컬 파일에 저장 중입니다. (서버 재배포 시 초기화될 수 있어요)"
+)
 
 api_key = get_api_key()
 if not api_key:
@@ -605,7 +683,7 @@ client = get_gemini_client(api_key)
 tab1, tab2 = st.tabs(["📸 이미지 업로드 & 도움받기", "🎲 문제 만들기 & 보관함"])
 
 # ==============================================================================
-# TAB 1 — 사진 업로드 → 확대/축소로 맞추기 → OCR 판독 → 사람이 확인/수정 → 로컬 검증
+# TAB 1
 # ==============================================================================
 with tab1:
     st.subheader("1. 스도쿠 이미지 가져오기")
@@ -764,7 +842,7 @@ with tab1:
             st.info("사진을 확대·축소·이동해 스도쿠 9×9 영역에 맞춘 뒤, 위 버튼으로 잘라내기를 완료하세요.")
 
 # ==============================================================================
-# TAB 2 — 문제 만들기 & 보관함 (순수 로컬 작동)
+# TAB 2 — 문제 만들기 & 보관함 (구글 드라이브 또는 로컬 파일 기반)
 # ==============================================================================
 with tab2:
     st.subheader("🎲 난이도별 스도쿠 문제 생성")
