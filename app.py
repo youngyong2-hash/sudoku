@@ -33,7 +33,7 @@ st.markdown(
 
         /* 제목이 휴대폰 화면 폭에 맞춰 자동으로 축소되어 한 줄을 유지하도록 처리 */
         .app-title {
-            font-size: clamp(1.15rem, 6.2vw, 2.4rem);
+            font-size: clamp(1.15rem, 4.5vw, 2.4rem);
             font-weight: 800;
             letter-spacing: -0.02em;
             white-space: nowrap;
