@@ -430,6 +430,8 @@ def save_puzzle(difficulty, puzzle, answer):
         json.dumps(answer),
         created_at,
     ])
+
+
 """def load_puzzles(difficulty=None):
     try:
         items = json.loads(DB_FILE.read_text(encoding="utf-8")) if DB_FILE.exists() else []
