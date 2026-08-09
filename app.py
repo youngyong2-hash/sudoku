@@ -21,7 +21,7 @@ from reportlab.pdfgen import canvas
 # =============================================================================
 # 1. App settings
 # =============================================================================
-st.set_page_config(page_title="🏄영용's Sudoku", page_icon="🏄", layout="centered")
+st.set_page_config(page_title="영용's Sudoku", page_icon="🏄", layout="centered")
 
 st.markdown(
     """
@@ -261,7 +261,119 @@ def generate_sudoku_puzzle(difficulty: str):
             puzzle[row][col] = old_value
     return puzzle, solution
 
+def get_candidates(board: list[list[int]], row: int, col: int) -> list[int]:
+    """비어 있는 한 칸에 들어갈 수 있는 후보 숫자 목록"""
+    if board[row][col] != 0:
+        return []
 
+    return [
+        number
+        for number in range(1, 10)
+        if is_valid(board, row, col, number)
+    ]
+
+
+def find_rule_error_cells(board: list[list[int]]) -> set[tuple[int, int]]:
+    """
+    행·열·3x3 박스에 중복된 숫자가 있으면 해당 셀 좌표를 반환.
+    좌표는 0부터 시작하는 (row, col) 형식.
+    """
+    errors = set()
+
+    def mark_duplicates(cells: list[tuple[int, int]]):
+        positions_by_number = {}
+
+        for row, col in cells:
+            value = board[row][col]
+
+            if value == 0:
+                continue
+
+            positions_by_number.setdefault(value, []).append((row, col))
+
+        for positions in positions_by_number.values():
+            if len(positions) > 1:
+                errors.update(positions)
+
+    # 행 검사
+    for row in range(9):
+        mark_duplicates([(row, col) for col in range(9)])
+
+    # 열 검사
+    for col in range(9):
+        mark_duplicates([(row, col) for row in range(9)])
+
+    # 3x3 박스 검사
+    for box_row in range(0, 9, 3):
+        for box_col in range(0, 9, 3):
+            mark_duplicates(
+                [
+                    (row, col)
+                    for row in range(box_row, box_row + 3)
+                    for col in range(box_col, box_col + 3)
+                ]
+            )
+
+    return errors
+
+
+def find_immediate_hint_cells(board: list[list[int]]) -> set[tuple[int, int]]:
+    """
+    바로 해결할 수 있는 빈칸 위치를 찾음.
+    1) 후보가 하나뿐인 칸(Naked Single)
+    2) 행·열·3x3 박스에서 특정 숫자가 들어갈 위치가 하나뿐인 칸(Hidden Single)
+    """
+    hint_cells = set()
+
+    # 1. 후보가 하나뿐인 빈칸
+    for row in range(9):
+        for col in range(9):
+            if board[row][col] == 0 and len(get_candidates(board, row, col)) == 1:
+                hint_cells.add((row, col))
+
+    # 2. 특정 숫자가 행에서 들어갈 수 있는 위치가 하나뿐인 경우
+    for row in range(9):
+        candidate_positions = {number: [] for number in range(1, 10)}
+
+        for col in range(9):
+            if board[row][col] == 0:
+                for number in get_candidates(board, row, col):
+                    candidate_positions[number].append((row, col))
+
+        for positions in candidate_positions.values():
+            if len(positions) == 1:
+                hint_cells.add(positions[0])
+
+    # 3. 특정 숫자가 열에서 들어갈 수 있는 위치가 하나뿐인 경우
+    for col in range(9):
+        candidate_positions = {number: [] for number in range(1, 10)}
+
+        for row in range(9):
+            if board[row][col] == 0:
+                for number in get_candidates(board, row, col):
+                    candidate_positions[number].append((row, col))
+
+        for positions in candidate_positions.values():
+            if len(positions) == 1:
+                hint_cells.add(positions[0])
+
+    # 4. 특정 숫자가 3x3 박스에서 들어갈 수 있는 위치가 하나뿐인 경우
+    for box_row in range(0, 9, 3):
+        for box_col in range(0, 9, 3):
+            candidate_positions = {number: [] for number in range(1, 10)}
+
+            for row in range(box_row, box_row + 3):
+                for col in range(box_col, box_col + 3):
+                    if board[row][col] == 0:
+                        for number in get_candidates(board, row, col):
+                            candidate_positions[number].append((row, col))
+
+            for positions in candidate_positions.values():
+                if len(positions) == 1:
+                    hint_cells.add(positions[0])
+
+    return hint_cells
+    
 # =============================================================================
 # 5. Local archive (no Google Drive upload)
 # =============================================================================
@@ -299,32 +411,107 @@ def save_puzzle(difficulty: str, puzzle: list[list[int]], solution: list[list[in
 # =============================================================================
 # 6. Board rendering and device downloads
 # =============================================================================
-def render_sudoku_board_html(puzzle: list[list[int]], solution: list[list[int]] | None = None) -> str:
+def render_sudoku_board_html(
+    puzzle: list[list[int]],
+    solution: list[list[int]] | None = None,
+    error_cells: set[tuple[int, int]] | None = None,
+    hint_cells: set[tuple[int, int]] | None = None,
+) -> str:
+    error_cells = error_cells or set()
+    hint_cells = hint_cells or set()
+
     html = """
     <style>
-        .sudoku-container { display:flex; justify-content:center; margin:15px 0; overflow-x:auto; }
-        .sudoku-board { border-collapse:collapse; border:3px solid #222; background:#fff; }
-        .sudoku-board td { width:36px; height:36px; text-align:center; vertical-align:middle; border:1px solid #ccc; font-size:18px; font-weight:700; color:#111; }
-        .sudoku-board td.solution-cell { color:#1d4ed8; background:#eff6ff; }
-        .sudoku-board tr:nth-child(3n) td { border-bottom:2px solid #222; }
-        .sudoku-board td:nth-child(3n) { border-right:2px solid #222; }
-        .sudoku-board tr:first-child td { border-top:2px solid #222; }
-        .sudoku-board td:first-child { border-left:2px solid #222; }
+        .sudoku-container {
+            display: flex;
+            justify-content: center;
+            margin: 15px 0;
+            overflow-x: auto;
+        }
+
+        .sudoku-board {
+            border-collapse: collapse;
+            border: 3px solid #222;
+            background: #ffffff;
+        }
+
+        .sudoku-board td {
+            width: 36px;
+            height: 36px;
+            text-align: center;
+            vertical-align: middle;
+            border: 1px solid #cccccc;
+            font-size: 18px;
+            font-weight: 700;
+            color: #111111;
+        }
+
+        .sudoku-board td.solution-cell {
+            color: #1d4ed8;
+            background: #eff6ff;
+        }
+
+        .sudoku-board td.error-cell {
+            color: #991b1b;
+            background-color: #fecaca;
+        }
+
+        .sudoku-board td.hint-cell {
+            background-color: #fef3c7;
+        }
+
+        .sudoku-board tr:nth-child(3n) td {
+            border-bottom: 2px solid #222;
+        }
+
+        .sudoku-board td:nth-child(3n) {
+            border-right: 2px solid #222;
+        }
+
+        .sudoku-board tr:first-child td {
+            border-top: 2px solid #222;
+        }
+
+        .sudoku-board td:first-child {
+            border-left: 2px solid #222;
+        }
     </style>
-    <div class='sudoku-container'><table class='sudoku-board'>
+
+    <div class="sudoku-container">
+        <table class="sudoku-board">
     """
+
     for row in range(9):
         html += "<tr>"
+
         for col in range(9):
             value = puzzle[row][col]
-            if value:
-                html += f"<td>{value}</td>"
-            elif solution:
-                html += f"<td class='solution-cell'>{solution[row][col]}</td>"
+            classes = []
+
+            if (row, col) in error_cells:
+                classes.append("error-cell")
+            elif (row, col) in hint_cells:
+                classes.append("hint-cell")
+            elif value == 0 and solution is not None:
+                classes.append("solution-cell")
+
+            class_text = f" class='{' '.join(classes)}'" if classes else ""
+
+            if value != 0:
+                html += f"<td{class_text}>{value}</td>"
+            elif solution is not None:
+                html += f"<td{class_text}>{solution[row][col]}</td>"
             else:
-                html += "<td></td>"
+                html += f"<td{class_text}></td>"
+
         html += "</tr>"
-    return html + "</table></div>"
+
+    html += """
+        </table>
+    </div>
+    """
+
+    return html
 
 
 def get_font(size: int, bold: bool = False):
@@ -520,23 +707,104 @@ with tab_image:
                         st.exception(error)
 
             if "ai_analysis" in st.session_state and "ai_image" in st.session_state:
-                analysis = SudokuAnalysis.model_validate(st.session_state["ai_analysis"])
-                recognized_grid = validate_sudoku_grid(analysis.grid)
-                saved_image = st.session_state["ai_image"]
-                st.markdown("---")
-                st.subheader("🔎 AI가 읽은 9×9 스도쿠 판")
-                st.markdown(render_sudoku_board_html(recognized_grid), unsafe_allow_html=True)
-                st.caption("빈칸 또는 판독이 불확실한 칸은 비어 있는 칸(내부값 0)으로 표시됩니다.")
+    analysis = SudokuAnalysis.model_validate(st.session_state["ai_analysis"])
+    recognized_grid = validate_sudoku_grid(analysis.grid)
 
-                grid_png = make_board_png(recognized_grid, title="AI Read Sudoku Grid")
-                st.download_button(
-                    "🖼️ 인식된 9×9 판 PNG 저장",
-                    data=grid_png,
-                    file_name="recognized_sudoku_grid.png",
-                    mime="image/png",
-                    key="recognized_grid_png",
-                    use_container_width=True,
-                )
+    st.markdown("---")
+    st.subheader("🔎 AI가 읽은 9×9 스도쿠 판")
+
+    # 로컬 알고리즘으로 규칙 위반 셀 탐색
+    error_cells = find_rule_error_cells(recognized_grid)
+
+    # 0이 하나도 없는지 확인
+    is_complete = all(
+        value != 0
+        for row in recognized_grid
+        for value in row
+    )
+
+    # -------------------------------------------------------------------------
+    # A. 모든 칸이 채워졌지만 규칙 위반이 있는 경우
+    # -------------------------------------------------------------------------
+    if is_complete and error_cells:
+        st.markdown(
+            render_sudoku_board_html(
+                recognized_grid,
+                error_cells=error_cells,
+            ),
+            unsafe_allow_html=True,
+        )
+
+        st.error("정답이 아닙니다. 규칙에 맞지 않는 숫자를 빨간색으로 표시했습니다.")
+        st.caption("빨간색 칸은 행, 열 또는 3×3 박스 안에서 숫자가 중복된 위치입니다.")
+
+    # -------------------------------------------------------------------------
+    # B. 모든 칸이 채워졌고 스도쿠 규칙도 모두 맞는 경우
+    # -------------------------------------------------------------------------
+    elif is_complete and not error_cells:
+        st.markdown(
+            render_sudoku_board_html(recognized_grid),
+            unsafe_allow_html=True,
+        )
+
+        st.success("🎉 정답입니다! 모든 행, 열, 3×3 박스가 스도쿠 규칙을 만족합니다.")
+
+        # 같은 판에서 rerun될 때 풍선이 반복 실행되지 않도록 해시 저장
+        completed_board_hash = hashlib.sha256(
+            json.dumps(recognized_grid).encode("utf-8")
+        ).hexdigest()
+
+        if st.session_state.get("celebrated_board_hash") != completed_board_hash:
+            st.session_state["celebrated_board_hash"] = completed_board_hash
+            st.balloons()
+
+    # -------------------------------------------------------------------------
+    # C. 빈칸이 있으며, 이미 규칙 위반 숫자가 있는 경우
+    # -------------------------------------------------------------------------
+    elif not is_complete and error_cells:
+        st.markdown(
+            render_sudoku_board_html(
+                recognized_grid,
+                error_cells=error_cells,
+            ),
+            unsafe_allow_html=True,
+        )
+
+        st.error("현재 판에 규칙에 맞지 않는 숫자가 있습니다. 빨간색 칸을 먼저 확인해 주세요.")
+
+    # -------------------------------------------------------------------------
+    # D. 빈칸이 있고, 바로 해결 가능한 칸이 있는 경우
+    # -------------------------------------------------------------------------
+    else:
+        hint_cells = find_immediate_hint_cells(recognized_grid)
+
+        st.markdown(
+            render_sudoku_board_html(
+                recognized_grid,
+                hint_cells=hint_cells,
+            ),
+            unsafe_allow_html=True,
+        )
+
+        if hint_cells:
+            st.info("💡 노란색으로 표시된 빈칸은 현재 상태에서 바로 해결할 수 있는 칸입니다.")
+        else:
+            st.info("현재 상태에서는 바로 확정할 수 있는 빈칸을 찾지 못했습니다.")
+
+    # 인식된 스도쿠 판 PNG 저장
+    recognized_png = make_board_png(
+        recognized_grid,
+        title="AI Read Sudoku Grid",
+    )
+
+    st.download_button(
+        "🖼️ 인식된 9×9 판 PNG 저장",
+        data=recognized_png,
+        file_name="recognized_sudoku_grid.png",
+        mime="image/png",
+        key="recognized_grid_png",
+        use_container_width=True,
+    )
 
                 if analysis.errors:
                     st.error(f"검증 결과: 규칙에 위배되는 숫자가 {len(analysis.errors)}곳 있습니다.")
