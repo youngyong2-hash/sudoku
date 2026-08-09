@@ -32,7 +32,7 @@ if not api_key:
 client = genai.Client(api_key=api_key)
 
 # ------------------------------------------------------------------------------
-# 2. 로컬 데이터 저장 및 불러오기 함수
+# 2. 데이터 저장/불러오기 함수
 # ------------------------------------------------------------------------------
 PUZZLE_FILE = "puzzles_db.json"
 
@@ -229,7 +229,7 @@ with tab1:
             st.image(target_img, caption="분석 영역 선택 완료", use_container_width=True)
 
             if st.button("💡 도움받기 (단 하나의 힌트 & 검증)", type="primary"):
-                with st.spinner("AI가 스도쿠 판을 정밀 분석 중입니다..."):
+                with st.spinner("AI가 빠르게 분석하는 중입니다..."):
                     system_prompt = """
                     당신은 엄격하고 명확한 스도쿠 검증 튜터입니다.
                     업로드된 이미지에서 9x9 스도쿠 판(인쇄체 및 손글씨)을 분석하세요.
@@ -252,7 +252,8 @@ with tab1:
                     2. single_hint: 현재 확실히 바로 채울 수 있는 '단 한 칸'의 위치, 정답 숫자, 이유를 제시하세요.
                     """
 
-                    model_candidates = ["gemini-2.5-flash", "gemini-2.0-flash"]
+                    # 가장 가볍고 넉넉한 2.5-flash-lite 및 2.0-flash 순서로 지연없이 즉시 요청
+                    model_candidates = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash"]
                     response = None
                     last_error_msg = ""
 
@@ -299,10 +300,7 @@ with tab1:
                                     f"👉 **풀이 이유:** {hint.get('reason')}"
                                 )
                         else:
-                            if "429" in last_error_msg or "RESOURCE_EXHAUSTED" in last_error_msg:
-                                st.warning("⏳ 순간 요청량이 많아 무료 한도에 도달했습니다. 약 30초~1분 뒤 다시 [도움받기]를 눌러보세요!")
-                            else:
-                                st.error(f"분석 중 오류가 발생했습니다: {last_error_msg}")
+                            st.warning("⚠️ 구글 API 무료 사용량이 일시적으로 몰렸습니다. 대기 없이 바로 [도움받기]를 다시 눌러보세요.")
 
                     except Exception as e:
                         st.error(f"결과 처리 중 오류가 발생했습니다: {e}")
