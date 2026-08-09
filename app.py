@@ -824,6 +824,11 @@ with tab_manual:
     # 방식 1: 숫자 직접 입력 (한 줄에 9자리씩, 9줄)
     # -------------------------------------------------------------------
     if input_method == "✍️ 숫자 직접 입력":
+        if st.session_state.get("manual_reset_pending"):
+            for row in range(9):
+                st.session_state[f"manual_row_{row}"] = ""
+            st.session_state["manual_reset_pending"] = False
+
         st.write("한 줄에 9자리씩, 빈칸은 0으로 입력하세요. 예: `310040275`")
 
         row_texts = []
@@ -837,6 +842,17 @@ with tab_manual:
                     placeholder="예: 310040275"
                 )
             )
+
+        preview_board, preview_error = parse_row_strings(row_texts)
+
+        if preview_board is not None:
+            st.markdown("#### 👀 9×9 미리보기")
+            preview_errors = find_rule_errors(preview_board)
+            st.markdown(render_board(preview_board, errors=preview_errors), unsafe_allow_html=True)
+            if preview_errors:
+                st.warning("빨간색으로 표시된 칸에 중복된 숫자가 있습니다.")
+        elif any(text.strip() for text in row_texts):
+            st.caption("9줄을 모두 9자리씩 채우면 여기에 미리보기가 표시됩니다.")
 
         if st.button("🔎 검증 후 보관함에 저장", type="primary", key="manual_type_save"):
             board, parse_error = parse_row_strings(row_texts)
@@ -856,10 +872,8 @@ with tab_manual:
                         st.warning(f"저장에 실패했습니다: {error}")
 
         if st.button("↩️ 입력값 초기화", key="manual_type_reset"):
-            for row in range(9):
-                st.session_state[f"manual_row_{row}"] = ""
+            st.session_state["manual_reset_pending"] = True
             st.rerun()
-
     # -------------------------------------------------------------------
     # 방식 2: 사진으로 인식 (교정도 한 줄에 9자리씩, 9줄)
     # -------------------------------------------------------------------
