@@ -350,7 +350,7 @@ def load_puzzles(difficulty=None):
 
 def save_puzzle(difficulty, puzzle, answer):
     items = load_puzzles()
-    items.append({"id":max([item.get("id",0) for item in items], default=0)+1,"difficulty":difficulty,"puzzle":puzzle,"solution":answer,"created_at":dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+    items.append({"id":max([item.get("id",0) for item in items], default=0)+1,"difficulty":difficulty,"puzzle":puzzle,"solution":answer,"created_at": dt.datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M:%S KST")})
     tmp = DB_FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(DB_FILE)
