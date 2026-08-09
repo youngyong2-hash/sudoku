@@ -279,48 +279,49 @@ def try_remove_group(puzzle, group):
 
     return False
     
-def generate_puzzle(difficulty):
+def generate_puzzle(difficulty, max_board_attempts=8):
     needed = {"초급": 38, "중급": 30, "고급": 24}[difficulty]
-    
-    # 1. 고정된 solve() 대신 형이 만든 '행렬 치환 무작위 보드 생성기' 호출!
-    answer = make_random_solution()
-    puzzle = [row[:] for row in answer]
 
-    # 2. 형이 만든 '180도 회전 대칭 그룹'을 가져와서 아름답게 지우기 시작
-    groups = make_rotational_groups()
-    random.shuffle(groups)
+    best_puzzle, best_answer, best_left = None, None, 82
 
-    left = 81
-    for group in groups:
-        # 이 그룹을 다 지웠을 때 남은 단서가 목표치(needed)보다 적어지면 스킵
-        if left - len(group) < needed:
-            continue
+    for _ in range(max_board_attempts):
+        answer = make_random_solution()
+        puzzle = [row[:] for row in answer]
 
-        # 유일해가 유지되면 그룹(2칸 또는 중앙 1칸)을 확정적으로 제거
-        if try_remove_group(puzzle, group):
-            left -= len(group)
+        groups = make_rotational_groups()
+        random.shuffle(groups)
 
-        if left <= needed:
-            break
-
-    # 3. 미세 조정: 대칭으로 2칸씩 지우다 보면 목표치(예: 30개)와 
-    # 딱 안 떨어질 수 있으니 남은 개수는 무작위로 1칸씩 정밀하게 깎기
-    if left > needed:
-        positions = [(r, c) for r in range(9) for c in range(9) if puzzle[r][c] != 0]
-        random.shuffle(positions)
-        
-        for r, c in positions:
+        left = 81
+        for group in groups:
+            if left - len(group) < needed:
+                continue
+            if try_remove_group(puzzle, group):
+                left -= len(group)
             if left <= needed:
                 break
-            old = puzzle[r][c]
-            puzzle[r][c] = 0
-            if count_solutions([row[:] for row in puzzle], limit=2) == 1:
-                left -= 1
-            else:
-                puzzle[r][c] = old
 
-    return puzzle, answer
+        if left > needed:
+            positions = [(r, c) for r in range(9) for c in range(9) if puzzle[r][c] != 0]
+            random.shuffle(positions)
+            for r, c in positions:
+                if left <= needed:
+                    break
+                old = puzzle[r][c]
+                puzzle[r][c] = 0
+                if count_solutions([row[:] for row in puzzle], limit=2) == 1:
+                    left -= 1
+                else:
+                    puzzle[r][c] = old
 
+        # 목표치에 정확히 도달하면 즉시 채택
+        if left == needed:
+            return puzzle, answer
+
+        # 아니면 지금까지 중 가장 가까운 결과를 기억
+        if left < best_left:
+            best_puzzle, best_answer, best_left = puzzle, answer, left
+
+    return best_puzzle, best_answer
 def find_rule_errors(board):
     errors = set()
     def inspect(cells):
