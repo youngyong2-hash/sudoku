@@ -11,7 +11,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # 1. 페이지 기본 설정 및 모바일 CSS
 # ------------------------------------------------------------------------------
-st.set_page_config(page_title="스도쿠 스마트 AI 도우미", page_icon="🧩", layout="centered")
+st.set_page_config(page_title="스도쿠 AI 도우미", page_icon="🧩", layout="centered")
 
 st.markdown("""
     <style>
@@ -32,9 +32,18 @@ if not api_key:
 client = genai.Client(api_key=api_key)
 
 # ------------------------------------------------------------------------------
-# 2. 데이터 저장/불러오기 함수
+# 2. 토큰 절감형 이미지 최적화 및 로컬 데이터 저장 함수
 # ------------------------------------------------------------------------------
 PUZZLE_FILE = "puzzles_db.json"
+
+def compress_for_min_tokens(image, max_dim=320):
+    """비전 토큰(Tile Tokens) 소모량을 극소화하기 위해 이미지를 320px 이하로 압축"""
+    image = ImageOps.exif_transpose(image)
+    w, h = image.size
+    if max(w, h) > max_dim:
+        scale = max_dim / float(max(w, h))
+        image = image.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
+    return image
 
 def save_puzzle(difficulty, puzzle, solution):
     puzzles = load_puzzles()
@@ -63,15 +72,8 @@ def load_puzzles(difficulty=None):
     return []
 
 # ------------------------------------------------------------------------------
-# 3. 이미지 최적화 및 스도쿠 알고리즘 함수
+# 3. 알고리즘 및 표 시각화 함수
 # ------------------------------------------------------------------------------
-def prepare_mobile_image(image, target_width=320):
-    image = ImageOps.exif_transpose(image)
-    w, h = image.size
-    scale = target_width / float(w)
-    new_h = int(float(h) * scale)
-    return image.resize((target_width, new_h), Image.Resampling.LANCZOS)
-
 def is_valid(board, row, col, num):
     for i in range(9):
         if board[row][i] == num or board[i][col] == num:
@@ -115,18 +117,14 @@ def solve_sudoku_exact(board):
 def generate_sudoku_puzzle(difficulty):
     full_board = [[0] * 9 for _ in range(9)]
     solve_board(full_board)
-    
     clues_count = {'초급': 38, '중급': 30, '고급': 24}.get(difficulty, 30)
     remove_count = 81 - clues_count
-    
     puzzle = [row[:] for row in full_board]
     positions = [(r, c) for r in range(9) for c in range(9)]
     random.shuffle(positions)
-    
     for i in range(remove_count):
         r, c = positions[i]
         puzzle[r][c] = 0
-        
     return puzzle, full_board
 
 def render_sudoku_board_html(puzzle, solution=None):
@@ -188,7 +186,7 @@ st.title("🧩 스도쿠 AI 스마트 도우미")
 tab1, tab2 = st.tabs(["📸 이미지 업로드 & 도움받기", "🎲 문제 만들기 & 보관함"])
 
 # ==============================================================================
-# TAB 1: 이미지 업로드 & 도움받기
+# TAB 1: 토큰 초절감형 이미지 업로드 & 도움받기
 # ==============================================================================
 with tab1:
     st.subheader("1. 스도쿠 이미지 가져오기")
@@ -196,7 +194,8 @@ with tab1:
 
     if img_file is not None:
         raw_image = Image.open(img_file)
-        working_img = prepare_mobile_image(raw_image, target_width=320)
+        # 이미지 크기를 압축하여 비전 토큰 소모 최소화
+        working_img = compress_for_min_tokens(raw_image, max_dim=320)
 
         if "rotate_angle" not in st.session_state:
             st.session_state["rotate_angle"] = 0
@@ -229,52 +228,26 @@ with tab1:
             st.image(target_img, caption="분석 영역 선택 완료", use_container_width=True)
 
             if st.button("💡 도움받기 (단 하나의 힌트 & 검증)", type="primary"):
-                with st.spinner("AI가 빠르게 분석하는 중입니다..."):
-                    system_prompt = """
-                    당신은 엄격하고 명확한 스도쿠 검증 튜터입니다.
-                    업로드된 이미지에서 9x9 스도쿠 판(인쇄체 및 손글씨)을 분석하세요.
-
-                    반드시 아래 구조의 응답을 JSON 형식으로만 작성하세요:
+                with st.spinner("최소 토큰 모드로 정밀 분석 중..."):
+                    # 토큰 절약을 위한 최소 프롬프트 구조
+                    system_prompt = """Analyze 9x9 Sudoku image. Output ONLY valid JSON:
                     {
-                        "errors": [
-                            {"row": 행번호(1-9), "col": 열번호(1-9), "reason": "오류 이유"}
-                        ],
-                        "single_hint": {
-                            "row": 행번호(1-9),
-                            "col": 열번호(1-9),
-                            "number": 들어갈숫자(1-9),
-                            "reason": "해당 칸에 이 숫자가 들어가는 논리적 이유"
-                        }
-                    }
-
-                    [주의 규칙]
-                    1. errors: 손글씨 중 스도쿠 규칙에 위배되는(틀린) 숫자의 위치(row, col)를 기록하세요. 없으면 빈 배열 []을 반환하세요.
-                    2. single_hint: 현재 확실히 바로 채울 수 있는 '단 한 칸'의 위치, 정답 숫자, 이유를 제시하세요.
-                    """
-
-                    # 가장 가볍고 넉넉한 2.5-flash-lite 및 2.0-flash 순서로 지연없이 즉시 요청
-                    model_candidates = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash"]
-                    response = None
-                    last_error_msg = ""
-
-                    for model_name in model_candidates:
-                        try:
-                            response = client.models.generate_content(
-                                model=model_name,
-                                contents=[target_img, "이 스도쿠 판의 틀린 손글씨 위치와 바로 해결 가능한 단 하나의 힌트를 JSON으로 출력하세요."],
-                                config=types.GenerateContentConfig(
-                                    system_instruction=system_prompt,
-                                    temperature=0.1,
-                                    response_mime_type="application/json"
-                                ),
-                            )
-                            if response and response.text:
-                                break
-                        except Exception as err:
-                            last_error_msg = str(err)
-                            continue
+                        "errors": [{"row": int(1-9), "col": int(1-9), "reason": "str"}],
+                        "single_hint": {"row": int(1-9), "col": int(1-9), "number": int(1-9), "reason": "str"}
+                    }"""
 
                     try:
+                        # 초저가/고속 모델 단일 지정 (토큰 비용 최소화)
+                        response = client.models.generate_content(
+                            model="gemini-2.5-flash-lite",
+                            contents=[target_img, "Find errors and 1 exact hint."],
+                            config=types.GenerateContentConfig(
+                                system_instruction=system_prompt,
+                                temperature=0.1,
+                                response_mime_type="application/json"
+                            ),
+                        )
+
                         if response and response.text:
                             result = json.loads(response.text)
                             errors = result.get("errors", [])
@@ -300,13 +273,13 @@ with tab1:
                                     f"👉 **풀이 이유:** {hint.get('reason')}"
                                 )
                         else:
-                            st.warning("⚠️ 구글 API 무료 사용량이 일시적으로 몰렸습니다. 대기 없이 바로 [도움받기]를 다시 눌러보세요.")
+                            st.error("분석 응답을 불러오지 못했습니다. 다시 시도해 주세요.")
 
                     except Exception as e:
-                        st.error(f"결과 처리 중 오류가 발생했습니다: {e}")
+                        st.error(f"분석 중 오류 발생: {e}")
 
 # ==============================================================================
-# TAB 2: 스도쿠 문제 만들기 & 보관함
+# TAB 2: 스도쿠 문제 만들기 & 보관함 (100% 로컬 계산 - 토큰 0소모)
 # ==============================================================================
 with tab2:
     st.subheader("🎲 난이도별 스도쿠 문제 생성")
