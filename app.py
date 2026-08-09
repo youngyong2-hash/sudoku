@@ -647,9 +647,11 @@ with tab_read:
 # =============================================================================
 with tab_create:
     st.subheader("🎲 난이도별 스도쿠 문제 생성")
-    first,second=st.columns([2,1])
-    difficulty=first.selectbox("난이도",["초급","중급","고급"])
-    second.write(""); second.write("")
+    first, second = st.columns([2, 1])
+    difficulty = first.selectbox("난이도", ["초급", "중급", "고급"])
+    second.write("")
+    second.write("")
+
     if second.button("문제 생성", type="primary", use_container_width=True):
         with st.spinner("유일한 정답을 가진 문제를 만들고 있습니다..."):
             puzzle, answer = generate_puzzle(difficulty)
@@ -660,22 +662,38 @@ with tab_create:
             save_puzzle(difficulty, puzzle, answer)
             st.success("문제를 만들고 보관함에 저장했습니다.")
         except Exception as error:
-        st.warning(f"문제는 생성됐지만 보관함 저장에는 실패했습니다: {error}")
+            st.warning(f"문제는 생성됐지만 보관함 저장에는 실패했습니다: {error}")
+
     if "puzzle" in st.session_state:
         st.markdown(f"### 📋 생성된 문제 · {st.session_state['difficulty']}")
-        show=st.toggle("🔍 정답 보기",key="current_solution")
-        st.markdown(render_board(st.session_state["puzzle"],st.session_state["answer"] if show else None),unsafe_allow_html=True)
-        download_buttons(st.session_state["puzzle"],st.session_state["difficulty"],"new")
-    st.markdown("---"); st.subheader("📁 저장된 문제 보관함")
-    selected=st.radio("조회 난이도",["전체","초급","중급","고급"],horizontal=True)
-    items=load_puzzles(None if selected=="전체" else selected)
+        show = st.toggle("🔍 정답 보기", key="current_solution")
+        st.markdown(
+            render_board(st.session_state["puzzle"], st.session_state["answer"] if show else None),
+            unsafe_allow_html=True
+        )
+        download_buttons(st.session_state["puzzle"], st.session_state["difficulty"], "new")
+
+    st.markdown("---")
+    st.subheader("📁 저장된 문제 보관함")
+    selected = st.radio("조회 난이도", ["전체", "초급", "중급", "고급"], horizontal=True)
+    items = load_puzzles(None if selected == "전체" else selected)
+
     if not items:
         st.info("저장된 문제가 없습니다.")
     else:
-        index=st.selectbox("불러올 문제",range(len(items)),format_func=lambda i:f"#{items[i].get('id','?')} [{items[i].get('difficulty','')}] {items[i].get('created_at','')}")
-        item=items[index]; saved=item["puzzle"]; solution=item.get("solution")
+        index = st.selectbox(
+            "불러올 문제",
+            range(len(items)),
+            format_func=lambda i: f"#{items[i].get('id','?')} [{items[i].get('difficulty','')}] {items[i].get('created_at','')}"
+        )
+        item = items[index]
+        saved = item["puzzle"]
+        solution = item.get("solution")
+
         if not solution:
-            solution=[row[:] for row in saved]; solve(solution)
-        show=st.toggle("🔍 저장된 문제 정답 보기",key="saved_solution")
-        st.markdown(render_board(saved,solution if show else None),unsafe_allow_html=True)
-        download_buttons(saved,item.get("difficulty","초급"),f"saved_{item.get('id',index)}")
+            solution = [row[:] for row in saved]
+            solve(solution)
+
+        show = st.toggle("🔍 저장된 문제 정답 보기", key="saved_solution")
+        st.markdown(render_board(saved, solution if show else None), unsafe_allow_html=True)
+        download_buttons(saved, item.get("difficulty", "초급"), f"saved_{item.get('id', index)}")
