@@ -1,54 +1,52 @@
-import os
-import io
-import json
-import random
-import hashlib
+import os, io, json, random, hashlib
 import datetime as dt
 from pathlib import Path
 
 import streamlit as st
-from PIL import Image, ImageDraw, ImageFont, ImageOps, UnidentifiedImageError
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 from streamlit_cropper import st_cropper
 from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
-from reportlab.lib.colors import HexColor
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
-from reportlab.pdfbase.pdfmetrics import stringWidth
+from reportlab.lib.colors import HexColor
 from reportlab.pdfgen import canvas
+from reportlab.pdfbase.pdfmetrics import stringWidth
 
 # =============================================================================
-# 1. App settings
+# 설정
 # =============================================================================
 st.set_page_config(page_title="영용's Sudoku", page_icon="🏄", layout="centered")
-
-st.markdown(
-    """
-    <style>
-        .stApp { max-width: 100%; padding-left: 0.5rem; padding-right: 0.5rem; }
-        .app-title { text-align: center; margin: 0.4rem 0 1.4rem; }
-        iframe { max-width: 100% !important; width: 100% !important; }
-        img { max-width: 100% !important; height: auto !important; }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+st.markdown("""
+<style>
+.stApp {max-width:100%; padding-left:.5rem; padding-right:.5rem;}
+.app-title {text-align:center; margin:.4rem 0 1.4rem;}
+.sudoku-wrap {display:flex; justify-content:center; overflow-x:auto; margin:15px 0;}
+.sudoku {border-collapse:collapse; border:3px solid #222; background:#fff;}
+.sudoku td {width:36px; height:36px; border:1px solid #ccc; text-align:center; vertical-align:middle; font-size:18px; font-weight:700; color:#111;}
+.sudoku tr:nth-child(3n) td {border-bottom:2px solid #222;}
+.sudoku td:nth-child(3n) {border-right:2px solid #222;}
+.sudoku tr:first-child td {border-top:2px solid #222;}
+.sudoku td:first-child {border-left:2px solid #222;}
+.sudoku td.error {background:#fecaca; color:#991b1b;}
+.sudoku td.hint {background:#fef3c7;}
+.sudoku td.answer {background:#eff6ff; color:#1d4ed8;}
+</style>
+""", unsafe_allow_html=True)
 st.markdown("<h1 class='app-title'>🏄영용's Sudoku</h1>", unsafe_allow_html=True)
 
-PUZZLE_FILE = Path("puzzles_db.json")
-CROPPER_MAX_DIM = 768
-DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
-
+DB_FILE = Path("puzzles_db.json")
+MAX_IMAGE_DIM = 768
+DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
 
 # =============================================================================
-# 2. Gemini data schema
+# Gemini: 손글씨 판독 JSON 형식
 # =============================================================================
 class SudokuError(BaseModel):
     row: int = Field(ge=1, le=9)
     col: int = Field(ge=1, le=9)
     reason: str
-
 
 class SudokuHint(BaseModel):
     row: int = Field(ge=1, le=9)
@@ -56,838 +54,355 @@ class SudokuHint(BaseModel):
     number: int = Field(ge=1, le=9)
     reason: str
 
-
 class SudokuAnalysis(BaseModel):
-    # 0 means an empty / unreadable cell.
     grid: list[list[int]]
     errors: list[SudokuError] = Field(default_factory=list)
     single_hint: SudokuHint | None = None
 
-
-def validate_sudoku_grid(grid: list[list[int]]) -> list[list[int]]:
-    if len(grid) != 9 or any(len(row) != 9 for row in grid):
-        raise ValueError("AI가 9x9 형식이 아닌 데이터를 반환했습니다.")
-    for row in grid:
-        for number in row:
-            if not isinstance(number, int) or not 0 <= number <= 9:
-                raise ValueError("스도쿠 숫자는 0부터 9까지의 정수여야 합니다.")
-    return grid
-
-
 @st.cache_resource
-def get_gemini_client(api_key: str):
+def gemini_client(api_key):
     return genai.Client(api_key=api_key)
 
-
-def get_api_key() -> str | None:
+def get_api_key():
     return st.secrets.get("GEMINI_API_KEY", None) or os.getenv("GEMINI_API_KEY")
 
+def validate_grid(grid):
+    if len(grid) != 9 or any(len(row) != 9 for row in grid):
+        raise ValueError("AI가 9x9 형식이 아닌 데이터를 반환했습니다.")
+    if any(not isinstance(n, int) or n < 0 or n > 9 for row in grid for n in row):
+        raise ValueError("스도쿠 숫자는 0부터 9까지만 허용됩니다.")
+    return grid
 
-def analyze_sudoku(client, image: Image.Image, model_name: str) -> SudokuAnalysis:
-    system_prompt = """
-당신은 스도쿠 이미지 판독 및 검증 전문 AI입니다.
-이미지에는 하나의 9x9 스도쿠 판이 있으며, 인쇄 숫자와 손글씨 숫자가 섞여 있을 수 있습니다.
-
-가장 중요한 작업은 손글씨와 인쇄 숫자를 읽어 정확한 9x9 grid로 변환하는 것입니다.
-
-반드시 지킬 규칙:
-1. grid는 정확히 9개의 행입니다.
-2. 각 행은 왼쪽에서 오른쪽 순서의 숫자 9개입니다.
-3. 비어 있는 칸 또는 읽기 불확실한 칸은 반드시 0으로 기록합니다.
-4. 판독되는 인쇄 숫자와 손글씨 숫자는 1~9 정수로 기록합니다.
-5. 확실하지 않은 숫자를 추측하지 마세요. 0으로 남기세요.
-6. errors에는 현재 숫자 중 행, 열 또는 3x3 박스 규칙을 위배하는 숫자만 넣습니다.
-7. single_hint에는 현재 grid에서 논리적으로 확실히 채울 수 있는 단 한 칸만 넣습니다.
-8. 확실한 힌트가 없으면 single_hint를 null로 설정합니다.
-9. row와 col은 사람 기준으로 1부터 9까지입니다.
-10. 격자 바깥의 제목, 날짜, 낙서, 메모는 무시하세요.
+def read_sudoku_with_ai(client, image, model):
+    prompt = """
+당신은 스도쿠 사진 판독 전문 AI입니다. 이미지의 9x9 스도쿠 판을 읽으세요.
+인쇄 숫자와 손글씨 숫자를 모두 읽어 grid에 기록합니다.
+- grid는 정확히 9행 9열이며, 왼쪽에서 오른쪽, 위에서 아래 순서입니다.
+- 비어 있거나 숫자를 확신할 수 없는 칸은 0입니다. 추측하지 마세요.
+- errors와 single_hint도 JSON 스키마에 맞춰 반환하세요.
+- 격자 밖의 글, 메모, 날짜는 무시하세요.
 """
-
     response = client.models.generate_content(
-        model=model_name,
-        contents=[image, "이 잘라낸 스도쿠 사진을 읽어 9x9 grid와 검증 결과를 JSON으로 반환하세요."],
+        model=model,
+        contents=[image, "사진 속 스도쿠를 9x9 숫자 배열로 읽어 JSON으로 반환하세요."],
         config=types.GenerateContentConfig(
-            system_instruction=system_prompt,
+            system_instruction=prompt,
             temperature=0.1,
             response_mime_type="application/json",
             response_schema=SudokuAnalysis,
         ),
     )
-
     if not response or not response.text:
-        raise RuntimeError("Gemini가 비어 있는 응답을 반환했습니다.")
-
-    result = SudokuAnalysis.model_validate_json(response.text)
-    result.grid = validate_sudoku_grid(result.grid)
-    return result
-
+        raise RuntimeError("Gemini가 빈 응답을 반환했습니다.")
+    data = SudokuAnalysis.model_validate_json(response.text)
+    data.grid = validate_grid(data.grid)
+    return data
 
 # =============================================================================
-# 3. Image helpers
+# 이미지 유틸
 # =============================================================================
-def normalize_image(image: Image.Image) -> Image.Image:
+def normalize(image):
     return ImageOps.exif_transpose(image).convert("RGB")
 
-
-def resize_image(image: Image.Image, max_dim: int) -> Image.Image:
-    image = normalize_image(image)
-    width, height = image.size
-    if max(width, height) <= max_dim:
+def resize(image, max_dim=MAX_IMAGE_DIM):
+    image = normalize(image)
+    w, h = image.size
+    if max(w, h) <= max_dim:
         return image
-    ratio = max_dim / max(width, height)
-    return image.resize(
-        (max(1, int(width * ratio)), max(1, int(height * ratio))),
-        Image.Resampling.LANCZOS,
-    )
+    ratio = max_dim / max(w, h)
+    return image.resize((int(w * ratio), int(h * ratio)), Image.Resampling.LANCZOS)
 
+def digest_image(image):
+    image = normalize(image)
+    return hashlib.sha256(str(image.size).encode() + image.tobytes()).hexdigest()
 
-def image_hash(image: Image.Image) -> str:
-    image = normalize_image(image)
-    digest = hashlib.sha256()
-    digest.update(str(image.size).encode("utf-8"))
-    digest.update(image.tobytes())
-    return digest.hexdigest()
-
-
-def upload_hash(uploaded_file) -> str:
-    return hashlib.sha256(uploaded_file.getvalue()).hexdigest()
-
-
-def draw_errors_on_image(image: Image.Image, errors: list[SudokuError]) -> Image.Image:
-    result = normalize_image(image).copy()
-    draw = ImageDraw.Draw(result)
-    width, height = result.size
-    cell_width, cell_height = width / 9, height / 9
-    line_width = max(3, int(width / 80))
-
-    for error in errors:
-        row, col = error.row - 1, error.col - 1
-        x1 = col * cell_width + cell_width * 0.15
-        y1 = row * cell_height + cell_height * 0.15
-        x2 = (col + 1) * cell_width - cell_width * 0.15
-        y2 = (row + 1) * cell_height - cell_height * 0.15
-        draw.line([(x1, y1), (x2, y2)], fill="red", width=line_width)
-        draw.line([(x1, y2), (x2, y1)], fill="red", width=line_width)
-    return result
-
+def mark_photo_errors(image, errors):
+    out = normalize(image).copy()
+    draw = ImageDraw.Draw(out)
+    w, h = out.size
+    cw, ch = w / 9, h / 9
+    stroke = max(3, int(w / 80))
+    for row, col in errors:
+        x1, y1 = col*cw+cw*.15, row*ch+ch*.15
+        x2, y2 = (col+1)*cw-cw*.15, (row+1)*ch-ch*.15
+        draw.line((x1,y1,x2,y2), fill="red", width=stroke)
+        draw.line((x1,y2,x2,y1), fill="red", width=stroke)
+    return out
 
 # =============================================================================
-# 4. Sudoku generation and solving
+# 스도쿠 로직
 # =============================================================================
-def is_valid(board: list[list[int]], row: int, col: int, number: int) -> bool:
-    for index in range(9):
-        if board[row][index] == number or board[index][col] == number:
+def valid(board, row, col, num):
+    for i in range(9):
+        if board[row][i] == num or board[i][col] == num:
             return False
-        box_row = 3 * (row // 3) + index // 3
-        box_col = 3 * (col // 3) + index % 3
-        if board[box_row][box_col] == number:
+        if board[3*(row//3)+i//3][3*(col//3)+i%3] == num:
             return False
     return True
 
+def candidates(board, row, col):
+    return [] if board[row][col] else [n for n in range(1, 10) if valid(board, row, col, n)]
 
-def find_best_empty(board: list[list[int]]):
-    best = None
-    best_candidates = None
-    for row in range(9):
-        for col in range(9):
-            if board[row][col] != 0:
-                continue
-            candidates = [number for number in range(1, 10) if is_valid(board, row, col, number)]
-            if not candidates:
-                return row, col, []
-            if best_candidates is None or len(candidates) < len(best_candidates):
-                best = (row, col)
-                best_candidates = candidates
-                if len(candidates) == 1:
-                    return row, col, candidates
-    if best is None:
-        return None
-    return best[0], best[1], best_candidates
+def best_empty(board):
+    result, best = None, None
+    for r in range(9):
+        for c in range(9):
+            if board[r][c] == 0:
+                items = candidates(board, r, c)
+                if not items: return r, c, []
+                if best is None or len(items) < len(best):
+                    result, best = (r, c), items
+    return None if result is None else (result[0], result[1], best)
 
-
-def fill_board(board: list[list[int]]) -> bool:
-    empty = find_best_empty(board)
-    if empty is None:
-        return True
-    row, col, candidates = empty
-    random.shuffle(candidates)
-    for number in candidates:
-        board[row][col] = number
-        if fill_board(board):
-            return True
-        board[row][col] = 0
+def solve(board):
+    empty = best_empty(board)
+    if empty is None: return True
+    r, c, nums = empty
+    for n in nums:
+        board[r][c] = n
+        if solve(board): return True
+        board[r][c] = 0
     return False
 
-
-def count_solutions(board: list[list[int]], limit: int = 2) -> int:
-    empty = find_best_empty(board)
-    if empty is None:
-        return 1
-    row, col, candidates = empty
+def solution_count(board, limit=2):
+    empty = best_empty(board)
+    if empty is None: return 1
+    r, c, nums = empty
     total = 0
-    for number in candidates:
-        board[row][col] = number
-        total += count_solutions(board, limit)
-        board[row][col] = 0
-        if total >= limit:
-            return total
+    for n in nums:
+        board[r][c] = n
+        total += solution_count(board, limit)
+        board[r][c] = 0
+        if total >= limit: return total
     return total
 
-
-def solve_sudoku_exact(board: list[list[int]]) -> list[list[int]] | None:
-    copied = [row[:] for row in board]
-    return copied if fill_board(copied) else None
-
-
-def generate_sudoku_puzzle(difficulty: str):
-    clues_by_difficulty = {"초급": 38, "중급": 30, "고급": 24}
-    desired_clues = clues_by_difficulty[difficulty]
-
-    solution = [[0] * 9 for _ in range(9)]
-    fill_board(solution)
+def create_puzzle(level):
+    clue_count = {"초급":38, "중급":30, "고급":24}[level]
+    solution = [[0]*9 for _ in range(9)]
+    solve(solution)
     puzzle = [row[:] for row in solution]
-    positions = [(row, col) for row in range(9) for col in range(9)]
+    positions = [(r,c) for r in range(9) for c in range(9)]
     random.shuffle(positions)
-    clues_left = 81
-
-    for row, col in positions:
-        if clues_left <= desired_clues:
-            break
-        old_value = puzzle[row][col]
-        puzzle[row][col] = 0
-        if count_solutions([r[:] for r in puzzle], limit=2) == 1:
-            clues_left -= 1
+    left = 81
+    for r, c in positions:
+        if left <= clue_count: break
+        before = puzzle[r][c]
+        puzzle[r][c] = 0
+        if solution_count([row[:] for row in puzzle]) == 1:
+            left -= 1
         else:
-            puzzle[row][col] = old_value
+            puzzle[r][c] = before
     return puzzle, solution
 
-def get_candidates(board: list[list[int]], row: int, col: int) -> list[int]:
-    """비어 있는 한 칸에 들어갈 수 있는 후보 숫자 목록"""
-    if board[row][col] != 0:
-        return []
-
-    return [
-        number
-        for number in range(1, 10)
-        if is_valid(board, row, col, number)
-    ]
-
-
-def find_rule_error_cells(board: list[list[int]]) -> set[tuple[int, int]]:
-    """
-    행·열·3x3 박스에 중복된 숫자가 있으면 해당 셀 좌표를 반환.
-    좌표는 0부터 시작하는 (row, col) 형식.
-    """
+def rule_errors(board):
     errors = set()
-
-    def mark_duplicates(cells: list[tuple[int, int]]):
-        positions_by_number = {}
-
-        for row, col in cells:
-            value = board[row][col]
-
-            if value == 0:
-                continue
-
-            positions_by_number.setdefault(value, []).append((row, col))
-
-        for positions in positions_by_number.values():
-            if len(positions) > 1:
-                errors.update(positions)
-
-    # 행 검사
-    for row in range(9):
-        mark_duplicates([(row, col) for col in range(9)])
-
-    # 열 검사
-    for col in range(9):
-        mark_duplicates([(row, col) for row in range(9)])
-
-    # 3x3 박스 검사
-    for box_row in range(0, 9, 3):
-        for box_col in range(0, 9, 3):
-            mark_duplicates(
-                [
-                    (row, col)
-                    for row in range(box_row, box_row + 3)
-                    for col in range(box_col, box_col + 3)
-                ]
-            )
-
+    def duplicates(cells):
+        found = {}
+        for r, c in cells:
+            if board[r][c]: found.setdefault(board[r][c], []).append((r,c))
+        for positions in found.values():
+            if len(positions) > 1: errors.update(positions)
+    for r in range(9): duplicates([(r,c) for c in range(9)])
+    for c in range(9): duplicates([(r,c) for r in range(9)])
+    for br in range(0,9,3):
+        for bc in range(0,9,3):
+            duplicates([(r,c) for r in range(br,br+3) for c in range(bc,bc+3)])
     return errors
 
+def immediate_hints(board):
+    hints = set()
+    # 후보가 하나뿐인 빈칸
+    for r in range(9):
+        for c in range(9):
+            if board[r][c] == 0 and len(candidates(board,r,c)) == 1:
+                hints.add((r,c))
+    # 행, 열, 3x3 박스에서 특정 숫자가 들어갈 수 있는 칸이 하나인 경우
+    groups = []
+    groups += [[(r,c) for c in range(9)] for r in range(9)]
+    groups += [[(r,c) for r in range(9)] for c in range(9)]
+    groups += [[(r,c) for r in range(br,br+3) for c in range(bc,bc+3)] for br in range(0,9,3) for bc in range(0,9,3)]
+    for group in groups:
+        places = {n:[] for n in range(1,10)}
+        for r,c in group:
+            if board[r][c] == 0:
+                for n in candidates(board,r,c): places[n].append((r,c))
+        for cells in places.values():
+            if len(cells) == 1: hints.add(cells[0])
+    return hints
 
-def find_immediate_hint_cells(board: list[list[int]]) -> set[tuple[int, int]]:
-    """
-    바로 해결할 수 있는 빈칸 위치를 찾음.
-    1) 후보가 하나뿐인 칸(Naked Single)
-    2) 행·열·3x3 박스에서 특정 숫자가 들어갈 위치가 하나뿐인 칸(Hidden Single)
-    """
-    hint_cells = set()
-
-    # 1. 후보가 하나뿐인 빈칸
-    for row in range(9):
-        for col in range(9):
-            if board[row][col] == 0 and len(get_candidates(board, row, col)) == 1:
-                hint_cells.add((row, col))
-
-    # 2. 특정 숫자가 행에서 들어갈 수 있는 위치가 하나뿐인 경우
-    for row in range(9):
-        candidate_positions = {number: [] for number in range(1, 10)}
-
-        for col in range(9):
-            if board[row][col] == 0:
-                for number in get_candidates(board, row, col):
-                    candidate_positions[number].append((row, col))
-
-        for positions in candidate_positions.values():
-            if len(positions) == 1:
-                hint_cells.add(positions[0])
-
-    # 3. 특정 숫자가 열에서 들어갈 수 있는 위치가 하나뿐인 경우
-    for col in range(9):
-        candidate_positions = {number: [] for number in range(1, 10)}
-
-        for row in range(9):
-            if board[row][col] == 0:
-                for number in get_candidates(board, row, col):
-                    candidate_positions[number].append((row, col))
-
-        for positions in candidate_positions.values():
-            if len(positions) == 1:
-                hint_cells.add(positions[0])
-
-    # 4. 특정 숫자가 3x3 박스에서 들어갈 수 있는 위치가 하나뿐인 경우
-    for box_row in range(0, 9, 3):
-        for box_col in range(0, 9, 3):
-            candidate_positions = {number: [] for number in range(1, 10)}
-
-            for row in range(box_row, box_row + 3):
-                for col in range(box_col, box_col + 3):
-                    if board[row][col] == 0:
-                        for number in get_candidates(board, row, col):
-                            candidate_positions[number].append((row, col))
-
-            for positions in candidate_positions.values():
-                if len(positions) == 1:
-                    hint_cells.add(positions[0])
-
-    return hint_cells
-    
 # =============================================================================
-# 5. Local archive (no Google Drive upload)
+# 보관함
 # =============================================================================
-def load_puzzles(difficulty: str | None = None) -> list[dict]:
-    if not PUZZLE_FILE.exists():
-        return []
+def load_records(level=None):
     try:
-        with PUZZLE_FILE.open("r", encoding="utf-8") as file:
-            records = json.load(file)
-        if not isinstance(records, list):
-            return []
-        return [record for record in records if record.get("difficulty") == difficulty] if difficulty else records
+        records = json.loads(DB_FILE.read_text(encoding="utf-8")) if DB_FILE.exists() else []
+        return [x for x in records if x.get("difficulty") == level] if level else records
     except (OSError, json.JSONDecodeError):
         return []
 
-
-def save_puzzle(difficulty: str, puzzle: list[list[int]], solution: list[list[int]]):
-    records = load_puzzles()
-    next_id = max((record.get("id", 0) for record in records), default=0) + 1
-    records.append(
-        {
-            "id": next_id,
-            "difficulty": difficulty,
-            "puzzle": puzzle,
-            "solution": solution,
-            "created_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        }
-    )
-    temp_file = PUZZLE_FILE.with_suffix(".tmp")
-    with temp_file.open("w", encoding="utf-8") as file:
-        json.dump(records, file, ensure_ascii=False, indent=2)
-    temp_file.replace(PUZZLE_FILE)
-
+def save_record(level, puzzle, solution):
+    records = load_records()
+    records.append({"id":max([x.get("id",0) for x in records], default=0)+1, "difficulty":level, "puzzle":puzzle, "solution":solution, "created_at":dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+    temp = DB_FILE.with_suffix(".tmp")
+    temp.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp.replace(DB_FILE)
 
 # =============================================================================
-# 6. Board rendering and device downloads
+# 표, PNG, A4 PDF
 # =============================================================================
-def render_sudoku_board_html(
-    puzzle: list[list[int]],
-    solution: list[list[int]] | None = None,
-    error_cells: set[tuple[int, int]] | None = None,
-    hint_cells: set[tuple[int, int]] | None = None,
-) -> str:
-    error_cells = error_cells or set()
-    hint_cells = hint_cells or set()
-
-    html = """
-    <style>
-        .sudoku-container {
-            display: flex;
-            justify-content: center;
-            margin: 15px 0;
-            overflow-x: auto;
-        }
-
-        .sudoku-board {
-            border-collapse: collapse;
-            border: 3px solid #222;
-            background: #ffffff;
-        }
-
-        .sudoku-board td {
-            width: 36px;
-            height: 36px;
-            text-align: center;
-            vertical-align: middle;
-            border: 1px solid #cccccc;
-            font-size: 18px;
-            font-weight: 700;
-            color: #111111;
-        }
-
-        .sudoku-board td.solution-cell {
-            color: #1d4ed8;
-            background: #eff6ff;
-        }
-
-        .sudoku-board td.error-cell {
-            color: #991b1b;
-            background-color: #fecaca;
-        }
-
-        .sudoku-board td.hint-cell {
-            background-color: #fef3c7;
-        }
-
-        .sudoku-board tr:nth-child(3n) td {
-            border-bottom: 2px solid #222;
-        }
-
-        .sudoku-board td:nth-child(3n) {
-            border-right: 2px solid #222;
-        }
-
-        .sudoku-board tr:first-child td {
-            border-top: 2px solid #222;
-        }
-
-        .sudoku-board td:first-child {
-            border-left: 2px solid #222;
-        }
-    </style>
-
-    <div class="sudoku-container">
-        <table class="sudoku-board">
-    """
-
-    for row in range(9):
+def board_html(board, solution=None, errors=None, hints=None):
+    errors, hints = errors or set(), hints or set()
+    html = "<div class='sudoku-wrap'><table class='sudoku'>"
+    for r in range(9):
         html += "<tr>"
-
-        for col in range(9):
-            value = puzzle[row][col]
-            classes = []
-
-            if (row, col) in error_cells:
-                classes.append("error-cell")
-            elif (row, col) in hint_cells:
-                classes.append("hint-cell")
-            elif value == 0 and solution is not None:
-                classes.append("solution-cell")
-
-            class_text = f" class='{' '.join(classes)}'" if classes else ""
-
-            if value != 0:
-                html += f"<td{class_text}>{value}</td>"
-            elif solution is not None:
-                html += f"<td{class_text}>{solution[row][col]}</td>"
-            else:
-                html += f"<td{class_text}></td>"
-
+        for c in range(9):
+            value = board[r][c]
+            cls = "error" if (r,c) in errors else "hint" if (r,c) in hints else "answer" if value == 0 and solution else ""
+            text = value or (solution[r][c] if solution else "")
+            html += f"<td class='{cls}'>{text}</td>"
         html += "</tr>"
+    return html + "</table></div>"
 
-    html += """
-        </table>
-    </div>
-    """
-
-    return html
-
-
-def get_font(size: int, bold: bool = False):
-    paths = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "C:/Windows/Fonts/arialbd.ttf" if bold else "C:/Windows/Fonts/arial.ttf",
-    ]
+def font(size, bold=False):
+    paths = ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "C:/Windows/Fonts/arialbd.ttf" if bold else "C:/Windows/Fonts/arial.ttf"]
     for path in paths:
-        if os.path.exists(path):
-            return ImageFont.truetype(path, size)
+        if os.path.exists(path): return ImageFont.truetype(path, size)
     return ImageFont.load_default()
 
+def board_png(board, title="Daily Sudoku Puzzle"):
+    cell, margin, title_h = 72, 42, 72
+    size = cell * 9
+    img = Image.new("RGB", (size+margin*2, size+margin*2+title_h), "white")
+    draw = ImageDraw.Draw(img)
+    draw.text((margin,18), title, fill="#111827", font=font(28, True))
+    x0, y0 = margin, margin+title_h
+    for i in range(10):
+        width = 5 if i % 3 == 0 else 1
+        draw.line((x0+i*cell,y0,x0+i*cell,y0+size), fill="#111", width=width)
+        draw.line((x0,y0+i*cell,x0+size,y0+i*cell), fill="#111", width=width)
+    num_font = font(38, True)
+    for r in range(9):
+        for c in range(9):
+            if board[r][c]:
+                box = draw.textbbox((0,0),str(board[r][c]),font=num_font)
+                draw.text((x0+c*cell+(cell-(box[2]-box[0]))/2, y0+r*cell+(cell-(box[3]-box[1]))/2-4), str(board[r][c]), fill="#111", font=num_font)
+    out = io.BytesIO(); img.save(out, format="PNG", optimize=True); return out.getvalue()
 
-def make_board_png(puzzle: list[list[int]], solution: list[list[int]] | None = None, title: str = "Daily Sudoku Puzzle") -> bytes:
-    cell, margin, title_height = 72, 42, 72
-    board_size = cell * 9
-    image = Image.new("RGB", (board_size + margin * 2, board_size + margin * 2 + title_height), "white")
-    draw = ImageDraw.Draw(image)
-    title_font, number_font = get_font(28, bold=True), get_font(38, bold=True)
-    draw.text((margin, 18), title, fill="#111827", font=title_font)
-
-    x0, y0 = margin, margin + title_height
-    for index in range(10):
-        line_width = 5 if index % 3 == 0 else 1
-        draw.line((x0 + index * cell, y0, x0 + index * cell, y0 + board_size), fill="#111", width=line_width)
-        draw.line((x0, y0 + index * cell, x0 + board_size, y0 + index * cell), fill="#111", width=line_width)
-
-    for row in range(9):
-        for col in range(9):
-            is_given = puzzle[row][col] != 0
-            value = puzzle[row][col] or (solution[row][col] if solution else 0)
-            if not value:
-                continue
-            box = draw.textbbox((0, 0), str(value), font=number_font)
-            text_width, text_height = box[2] - box[0], box[3] - box[1]
-            x = x0 + col * cell + (cell - text_width) / 2
-            y = y0 + row * cell + (cell - text_height) / 2 - 4
-            draw.text((x, y), str(value), fill="#111" if is_given else "#1d4ed8", font=number_font)
-
-    output = io.BytesIO()
-    image.save(output, format="PNG", optimize=True)
-    return output.getvalue()
-
-
-def make_print_pdf(puzzle: list[list[int]], print_date: dt.date) -> bytes:
-    """One-page A4 PDF. This is downloaded to the user's device, not Drive."""
-    output = io.BytesIO()
-    pdf = canvas.Canvas(output, pagesize=A4)
-    page_width, page_height = A4
-
-    pdf.setFillColor(HexColor("#111827"))
-    pdf.setFont("Helvetica-Bold", 26)
-    pdf.drawCentredString(page_width / 2, page_height - 30 * mm, "Daily Sudoku Puzzle")
-    pdf.setFillColor(HexColor("#4B5563"))
-    pdf.setFont("Helvetica", 12)
-    pdf.drawCentredString(page_width / 2, page_height - 39 * mm, print_date.strftime("%Y.%m.%d"))
-
-    board_size = 160 * mm
-    cell = board_size / 9
-    left = (page_width - board_size) / 2
-    bottom = 57 * mm
+def puzzle_pdf(board, date_value):
+    out = io.BytesIO(); pdf = canvas.Canvas(out, pagesize=A4)
+    pw, ph = A4; size = 160*mm; cell = size/9; left = (pw-size)/2; bottom = 57*mm
+    pdf.setFillColor(HexColor("#111827")); pdf.setFont("Helvetica-Bold",26); pdf.drawCentredString(pw/2,ph-30*mm,"Daily Sudoku Puzzle")
+    pdf.setFillColor(HexColor("#4B5563")); pdf.setFont("Helvetica",12); pdf.drawCentredString(pw/2,ph-39*mm,date_value.strftime("%Y.%m.%d"))
     pdf.setStrokeColor(HexColor("#111111"))
-    for index in range(10):
-        pdf.setLineWidth(2.1 if index % 3 == 0 else 0.45)
-        position = index * cell
-        pdf.line(left + position, bottom, left + position, bottom + board_size)
-        pdf.line(left, bottom + position, left + board_size, bottom + position)
+    for i in range(10):
+        pdf.setLineWidth(2.1 if i%3==0 else .45); p=i*cell
+        pdf.line(left+p,bottom,left+p,bottom+size); pdf.line(left,bottom+p,left+size,bottom+p)
+    pdf.setFillColor(HexColor("#111111")); pdf.setFont("Helvetica-Bold",19)
+    for r in range(9):
+        for c in range(9):
+            if board[r][c]:
+                text=str(board[r][c]); x=left+c*cell+(cell-stringWidth(text,"Helvetica-Bold",19))/2
+                pdf.drawString(x,bottom+(8-r)*cell+cell*.31,text)
+    pdf.setFillColor(HexColor("#6B7280")); pdf.setFont("Helvetica",9); pdf.drawCentredString(pw/2,24*mm,"Solve one square at a time. Enjoy your puzzle!")
+    pdf.save(); return out.getvalue()
 
-    pdf.setFillColor(HexColor("#111111"))
-    pdf.setFont("Helvetica-Bold", 19)
-    for row in range(9):
-        for col in range(9):
-            value = puzzle[row][col]
-            if value:
-                text = str(value)
-                x = left + col * cell + (cell - stringWidth(text, "Helvetica-Bold", 19)) / 2
-                y = bottom + (8 - row) * cell + cell * 0.31
-                pdf.drawString(x, y, text)
-
-    pdf.setFillColor(HexColor("#6B7280"))
-    pdf.setFont("Helvetica", 9)
-    pdf.drawCentredString(page_width / 2, 24 * mm, "Solve one square at a time. Enjoy your puzzle!")
-    pdf.showPage()
-    pdf.save()
-    return output.getvalue()
-
-
-def show_device_downloads(puzzle: list[list[int]], difficulty: str, key_prefix: str):
-    st.caption("버튼을 누르면 PDF 또는 PNG 파일이 현재 사용 중인 기기(휴대폰·PC)에 저장됩니다.")
-    date_value = st.date_input("인쇄 날짜", value=dt.date.today(), key=f"{key_prefix}_date")
-    file_date = date_value.strftime("%Y%m%d")
-    pdf_data = make_print_pdf(puzzle, date_value)
-    png_data = make_board_png(puzzle, title=f"Daily Sudoku Puzzle · {difficulty}")
-    pdf_col, png_col = st.columns(2)
-    with pdf_col:
-        st.download_button(
-            "🖨️ A4 PDF 저장",
-            data=pdf_data,
-            file_name=f"daily_sudoku_{file_date}.pdf",
-            mime="application/pdf",
-            key=f"{key_prefix}_pdf",
-            use_container_width=True,
-        )
-    with png_col:
-        st.download_button(
-            "🖼️ PNG 저장",
-            data=png_data,
-            file_name=f"daily_sudoku_{file_date}.png",
-            mime="image/png",
-            key=f"{key_prefix}_png",
-            use_container_width=True,
-        )
-
+def downloads(board, level, prefix):
+    st.caption("다운로드 버튼을 누르면 현재 기기(휴대폰 또는 PC)에 파일이 저장됩니다.")
+    date_value = st.date_input("인쇄 날짜", value=dt.date.today(), key=prefix+"_date")
+    stamp = date_value.strftime("%Y%m%d")
+    a,b = st.columns(2)
+    a.download_button("🖨️ A4 PDF 저장", puzzle_pdf(board,date_value), f"daily_sudoku_{stamp}.pdf", "application/pdf", key=prefix+"_pdf", use_container_width=True)
+    b.download_button("🖼️ PNG 저장", board_png(board, f"Daily Sudoku Puzzle · {level}"), f"daily_sudoku_{stamp}.png", "image/png", key=prefix+"_png", use_container_width=True)
 
 # =============================================================================
-# 7. Main user interface
+# 화면: 사진 읽기
 # =============================================================================
-tab_image, tab_create = st.tabs(["📸 사진 읽기 & 도움받기", "🎲 문제 만들기 & 보관함"])
-
-with tab_image:
+tab_read, tab_make = st.tabs(["📸 사진 읽기 & 확인", "🎲 문제 만들기 & 보관함"])
+with tab_read:
     st.subheader("1. 스도쿠 사진 가져오기")
-    uploaded_image = st.file_uploader("스도쿠 사진을 촬영하거나 업로드하세요", type=["jpg", "jpeg", "png"])
-
-    if uploaded_image is not None:
-        new_upload_hash = upload_hash(uploaded_image)
-        if st.session_state.get("uploaded_image_hash") != new_upload_hash:
-            st.session_state["uploaded_image_hash"] = new_upload_hash
-            st.session_state["rotate_angle"] = 0
-            st.session_state.pop("crop_image_hash", None)
-            st.session_state.pop("ai_analysis", None)
-            st.session_state.pop("ai_image", None)
-
+    upload = st.file_uploader("스도쿠 사진을 촬영하거나 업로드하세요", type=["jpg","jpeg","png"])
+    if upload:
+        file_hash = hashlib.sha256(upload.getvalue()).hexdigest()
+        if st.session_state.get("file_hash") != file_hash:
+            st.session_state.update({"file_hash":file_hash,"angle":0})
+            for k in ["crop_hash","analysis","analysis_img","celebrate"]: st.session_state.pop(k,None)
         try:
-            raw_image = normalize_image(Image.open(uploaded_image))
-        except (UnidentifiedImageError, OSError):
-            st.error("이미지를 열 수 없습니다. JPG 또는 PNG 파일인지 확인해 주세요.")
-            st.stop()
-
-        st.session_state.setdefault("rotate_angle", 0)
-        st.subheader("2. 사진 방향 및 9×9 영역 설정")
-        rotate_col, reset_col = st.columns(2)
-        with rotate_col:
-            if st.button("🔄 90° 회전", key="rotate"):
-                st.session_state["rotate_angle"] = (st.session_state["rotate_angle"] - 90) % 360
-                st.session_state.pop("ai_analysis", None)
-                st.session_state.pop("ai_image", None)
-        with reset_col:
-            if st.button("↩️ 방향 초기화", key="reset"):
-                st.session_state["rotate_angle"] = 0
-                st.session_state.pop("ai_analysis", None)
-                st.session_state.pop("ai_image", None)
-
-        work_image = resize_image(raw_image, CROPPER_MAX_DIM)
-        if st.session_state["rotate_angle"]:
-            work_image = work_image.rotate(st.session_state["rotate_angle"], expand=True)
-
-        use_cropper = st.checkbox("✂️ 빨간 박스로 9×9 영역 자르기", value=True, key="crop_enabled")
-        if use_cropper:
-            st.write("빨간 박스가 스도쿠의 바깥 격자선에 맞도록 모서리를 조절하세요.")
-            target_image = st_cropper(
-                work_image,
-                realtime_update=True,
-                box_color="#FF0000",
-                aspect_ratio=(1, 1),
-                key="sudoku_cropper",
-            )
-        else:
-            target_image = work_image
-
-        if target_image is not None:
-            new_crop_hash = image_hash(target_image)
-            if st.session_state.get("crop_image_hash") != new_crop_hash:
-                st.session_state["crop_image_hash"] = new_crop_hash
-                st.session_state.pop("ai_analysis", None)
-                st.session_state.pop("ai_image", None)
-
-            st.image(target_image, caption="AI가 읽을 최종 9×9 영역", use_container_width=True)
-            st.caption("손글씨 숫자는 굵고 선명하게, 격자가 정면을 보도록 촬영하면 인식률이 좋아집니다.")
-
-            api_key = get_api_key()
-            model_name = st.text_input("Gemini 모델", value=DEFAULT_MODEL, key="gemini_model")
-            if not api_key:
-                st.info("Gemini 분석을 사용하려면 Streamlit Secrets에 GEMINI_API_KEY를 설정해 주세요.")
-            elif st.button("🔎 손글씨 읽기 · 9×9 변환 · 검증", type="primary", key="read_sudoku"):
-                with st.spinner("손글씨 숫자를 읽고 9×9 스도쿠 판으로 변환하고 있습니다..."):
-                    try:
-                        client = get_gemini_client(api_key)
-                        analysis = analyze_sudoku(client, target_image, model_name)
-                        st.session_state["ai_analysis"] = analysis.model_dump()
-                        st.session_state["ai_image"] = target_image.copy()
-                    except Exception as error:
-                        st.error("AI 분석에 실패했습니다. API 키, 모델명, 모델 사용 권한을 확인해 주세요.")
-                        st.exception(error)
-
-            if "ai_analysis" in st.session_state and "ai_image" in st.session_state:
-    analysis = SudokuAnalysis.model_validate(st.session_state["ai_analysis"])
-    recognized_grid = validate_sudoku_grid(analysis.grid)
-
-    st.markdown("---")
-    st.subheader("🔎 AI가 읽은 9×9 스도쿠 판")
-
-    # 로컬 알고리즘으로 규칙 위반 셀 탐색
-    error_cells = find_rule_error_cells(recognized_grid)
-
-    # 0이 하나도 없는지 확인
-    is_complete = all(
-        value != 0
-        for row in recognized_grid
-        for value in row
-    )
-
-    # -------------------------------------------------------------------------
-    # A. 모든 칸이 채워졌지만 규칙 위반이 있는 경우
-    # -------------------------------------------------------------------------
-    if is_complete and error_cells:
-        st.markdown(
-            render_sudoku_board_html(
-                recognized_grid,
-                error_cells=error_cells,
-            ),
-            unsafe_allow_html=True,
-        )
-
-        st.error("정답이 아닙니다. 규칙에 맞지 않는 숫자를 빨간색으로 표시했습니다.")
-        st.caption("빨간색 칸은 행, 열 또는 3×3 박스 안에서 숫자가 중복된 위치입니다.")
-
-    # -------------------------------------------------------------------------
-    # B. 모든 칸이 채워졌고 스도쿠 규칙도 모두 맞는 경우
-    # -------------------------------------------------------------------------
-    elif is_complete and not error_cells:
-        st.markdown(
-            render_sudoku_board_html(recognized_grid),
-            unsafe_allow_html=True,
-        )
-
-        st.success("🎉 정답입니다! 모든 행, 열, 3×3 박스가 스도쿠 규칙을 만족합니다.")
-
-        # 같은 판에서 rerun될 때 풍선이 반복 실행되지 않도록 해시 저장
-        completed_board_hash = hashlib.sha256(
-            json.dumps(recognized_grid).encode("utf-8")
-        ).hexdigest()
-
-        if st.session_state.get("celebrated_board_hash") != completed_board_hash:
-            st.session_state["celebrated_board_hash"] = completed_board_hash
-            st.balloons()
-
-    # -------------------------------------------------------------------------
-    # C. 빈칸이 있으며, 이미 규칙 위반 숫자가 있는 경우
-    # -------------------------------------------------------------------------
-    elif not is_complete and error_cells:
-        st.markdown(
-            render_sudoku_board_html(
-                recognized_grid,
-                error_cells=error_cells,
-            ),
-            unsafe_allow_html=True,
-        )
-
-        st.error("현재 판에 규칙에 맞지 않는 숫자가 있습니다. 빨간색 칸을 먼저 확인해 주세요.")
-
-    # -------------------------------------------------------------------------
-    # D. 빈칸이 있고, 바로 해결 가능한 칸이 있는 경우
-    # -------------------------------------------------------------------------
-    else:
-        hint_cells = find_immediate_hint_cells(recognized_grid)
-
-        st.markdown(
-            render_sudoku_board_html(
-                recognized_grid,
-                hint_cells=hint_cells,
-            ),
-            unsafe_allow_html=True,
-        )
-
-        if hint_cells:
-            st.info("💡 노란색으로 표시된 빈칸은 현재 상태에서 바로 해결할 수 있는 칸입니다.")
-        else:
-            st.info("현재 상태에서는 바로 확정할 수 있는 빈칸을 찾지 못했습니다.")
-
-    # 인식된 스도쿠 판 PNG 저장
-    recognized_png = make_board_png(
-        recognized_grid,
-        title="AI Read Sudoku Grid",
-    )
-
-    st.download_button(
-        "🖼️ 인식된 9×9 판 PNG 저장",
-        data=recognized_png,
-        file_name="recognized_sudoku_grid.png",
-        mime="image/png",
-        key="recognized_grid_png",
-        use_container_width=True,
-    )
-
-                if analysis.errors:
-                    st.error(f"검증 결과: 규칙에 위배되는 숫자가 {len(analysis.errors)}곳 있습니다.")
-                    st.image(
-                        draw_errors_on_image(saved_image, analysis.errors),
-                        caption="규칙에 맞지 않는 위치를 빨간 X로 표시했습니다.",
-                        use_container_width=True,
-                    )
-                    for error in analysis.errors:
-                        st.write(f"- {error.row}행 {error.col}열: {error.reason}")
+            original = normalize(Image.open(upload))
+        except Exception:
+            st.error("이미지를 열 수 없습니다."); st.stop()
+        st.session_state.setdefault("angle",0)
+        c1,c2=st.columns(2)
+        if c1.button("🔄 90° 회전"):
+            st.session_state["angle"]=(st.session_state["angle"]-90)%360; st.session_state.pop("analysis",None)
+        if c2.button("↩️ 방향 초기화"):
+            st.session_state["angle"]=0; st.session_state.pop("analysis",None)
+        work=resize(original)
+        if st.session_state["angle"]: work=work.rotate(st.session_state["angle"],expand=True)
+        crop=st.checkbox("✂️ 빨간 박스로 9×9 영역 자르기",value=True)
+        target=st_cropper(work,realtime_update=True,box_color="#FF0000",aspect_ratio=(1,1),key="cropper") if crop else work
+        if target:
+            current_hash=digest_image(target)
+            if st.session_state.get("crop_hash") != current_hash:
+                st.session_state["crop_hash"]=current_hash
+                for k in ["analysis","analysis_img","celebrate"]: st.session_state.pop(k,None)
+            st.image(target,caption="AI가 읽을 최종 9×9 영역",use_container_width=True)
+            key=get_api_key(); model=st.text_input("Gemini 모델",value=DEFAULT_MODEL)
+            if not key: st.info("Streamlit Secrets에 GEMINI_API_KEY를 설정해 주세요.")
+            elif st.button("🔎 손글씨 읽기 및 정답 확인",type="primary"):
+                try:
+                    with st.spinner("손글씨를 읽고 스도쿠를 확인하고 있습니다..."):
+                        result=read_sudoku_with_ai(gemini_client(key),target,model)
+                    st.session_state["analysis"]=result.model_dump(); st.session_state["analysis_img"]=target.copy()
+                except Exception as e:
+                    st.error("AI 분석 실패: API 키, 모델명, 모델 사용 권한을 확인해 주세요."); st.exception(e)
+            if "analysis" in st.session_state:
+                grid=validate_grid(SudokuAnalysis.model_validate(st.session_state["analysis"]).grid)
+                errors=rule_errors(grid); complete=all(n != 0 for row in grid for n in row)
+                st.markdown("---"); st.subheader("🔎 AI가 읽은 9×9 스도쿠 판")
+                if errors:
+                    st.markdown(board_html(grid,errors=errors),unsafe_allow_html=True)
+                    st.error("규칙에 맞지 않는 숫자를 빨간색으로 표시했습니다.")
+                    if "analysis_img" in st.session_state: st.image(mark_photo_errors(st.session_state["analysis_img"],errors),caption="원본 사진의 오류 위치",use_container_width=True)
+                elif complete:
+                    st.markdown(board_html(grid),unsafe_allow_html=True)
+                    st.success("🎉 정답입니다! 모든 행, 열, 3×3 박스가 규칙을 만족합니다.")
+                    done_hash=hashlib.sha256(json.dumps(grid).encode()).hexdigest()
+                    if st.session_state.get("celebrate") != done_hash:
+                        st.session_state["celebrate"]=done_hash; st.balloons()
                 else:
-                    st.success("검증 결과: 현재 읽힌 숫자에서 스도쿠 규칙 위반을 찾지 못했습니다.")
+                    hints=immediate_hints(grid)
+                    st.markdown(board_html(grid,hints=hints),unsafe_allow_html=True)
+                    st.info("💡 노란색 칸은 현재 상태에서 바로 해결할 수 있는 빈칸입니다." if hints else "현재는 바로 확정할 수 있는 빈칸을 찾지 못했습니다.")
+                st.download_button("🖼️ 인식된 9×9 판 PNG 저장",board_png(grid,"AI Read Sudoku Grid"),"recognized_sudoku_grid.png","image/png",key="read_png",use_container_width=True)
 
-                if analysis.single_hint:
-                    hint = analysis.single_hint
-                    st.subheader("💡 바로 해결 가능한 한 칸")
-                    st.info(
-                        f"위치: {hint.row}행 {hint.col}열\n\n"
-                        f"들어갈 숫자: {hint.number}\n\n"
-                        f"이유: {hint.reason}"
-                    )
-                else:
-                    st.info("이 사진에서는 확실한 한 칸 힌트를 찾지 못했습니다.")
-
-with tab_create:
+# =============================================================================
+# 화면: 문제 생성 / 보관함
+# =============================================================================
+with tab_make:
     st.subheader("🎲 난이도별 스도쿠 문제 생성")
-    difficulty_col, create_col = st.columns([2, 1])
-    with difficulty_col:
-        difficulty = st.selectbox("난이도", ["초급", "중급", "고급"])
-    with create_col:
-        st.write("")
-        st.write("")
-        create_button = st.button("문제 생성", type="primary", use_container_width=True)
-
-    if create_button:
+    a,b=st.columns([2,1])
+    level=a.selectbox("난이도",["초급","중급","고급"])
+    b.write(""); b.write("")
+    if b.button("문제 생성",type="primary",use_container_width=True):
         with st.spinner("유일한 정답을 가진 문제를 만들고 있습니다..."):
-            puzzle, solution = generate_sudoku_puzzle(difficulty)
-            st.session_state["current_puzzle"] = puzzle
-            st.session_state["current_solution"] = solution
-            st.session_state["current_difficulty"] = difficulty
-            try:
-                save_puzzle(difficulty, puzzle, solution)
-                st.success(f"새로운 {difficulty} 문제를 만들고 보관함에 저장했습니다.")
-            except OSError:
-                st.warning("문제는 생성했지만 서버 보관함 파일 저장에는 실패했습니다. 다운로드는 가능합니다.")
-
-    if "current_puzzle" in st.session_state:
-        current_puzzle = st.session_state["current_puzzle"]
-        current_solution = st.session_state["current_solution"]
-        current_difficulty = st.session_state["current_difficulty"]
-        st.markdown(f"### 📋 생성된 문제 · {current_difficulty}")
-        show_solution = st.toggle("🔍 정답 보기", key="current_solution_toggle")
-        st.markdown(
-            render_sudoku_board_html(current_puzzle, current_solution if show_solution else None),
-            unsafe_allow_html=True,
-        )
-        show_device_downloads(current_puzzle, current_difficulty, "current")
-
-    st.markdown("---")
-    st.subheader("📁 저장된 문제 보관함")
-    filter_option = st.radio("조회 난이도", ["전체", "초급", "중급", "고급"], horizontal=True)
-    records = load_puzzles(None if filter_option == "전체" else filter_option)
-
-    if not records:
-        st.info("저장된 문제가 없습니다. 위에서 새 문제를 만들어 보세요.")
+            puzzle,answer=create_puzzle(level)
+        st.session_state.update({"puzzle":puzzle,"answer":answer,"level":level})
+        try: save_record(level,puzzle,answer); st.success("문제를 만들고 보관함에 저장했습니다.")
+        except OSError: st.warning("문제는 생성됐지만 보관함 저장에는 실패했습니다.")
+    if "puzzle" in st.session_state:
+        st.markdown(f"### 📋 생성된 문제 · {st.session_state['level']}")
+        show=st.toggle("🔍 정답 보기",key="new_sol")
+        st.markdown(board_html(st.session_state["puzzle"],st.session_state["answer"] if show else None),unsafe_allow_html=True)
+        downloads(st.session_state["puzzle"],st.session_state["level"],"new")
+    st.markdown("---"); st.subheader("📁 저장된 문제 보관함")
+    choice=st.radio("조회 난이도",["전체","초급","중급","고급"],horizontal=True)
+    records=load_records(None if choice=="전체" else choice)
+    if not records: st.info("저장된 문제가 없습니다.")
     else:
-        st.write(f"총 {len(records)}개의 문제가 저장되어 있습니다.")
-        selected_index = st.selectbox(
-            "불러올 문제",
-            options=range(len(records)),
-            format_func=lambda index: (
-                f"#{records[index].get('id', '?')} "
-                f"[{records[index].get('difficulty', '')}] "
-                f"{records[index].get('created_at', '')}"
-            ),
-        )
-        record = records[selected_index]
-        saved_puzzle = record["puzzle"]
-        saved_solution = record.get("solution") or solve_sudoku_exact(saved_puzzle)
-        saved_difficulty = record.get("difficulty", "스도쿠")
-        show_saved_solution = st.toggle("🔍 저장된 문제 정답 보기", key="saved_solution_toggle")
-        st.markdown(
-            render_sudoku_board_html(saved_puzzle, saved_solution if show_saved_solution else None),
-            unsafe_allow_html=True,
-        )
-        show_device_downloads(saved_puzzle, saved_difficulty, f"saved_{record.get('id', selected_index)}")
+        idx=st.selectbox("불러올 문제",range(len(records)),format_func=lambda i:f"#{records[i].get('id','?')} [{records[i].get('difficulty','')}] {records[i].get('created_at','')}")
+        item=records[idx]; saved=item["puzzle"]; answer=item.get("solution")
+        if not answer:
+            answer=[r[:] for r in saved]; solve(answer)
+        show=st.toggle("🔍 저장된 문제 정답 보기",key="saved_sol")
+        st.markdown(board_html(saved,answer if show else None),unsafe_allow_html=True)
+        downloads(saved,item.get("difficulty","스도쿠"),f"saved_{item.get('id',idx)}")
