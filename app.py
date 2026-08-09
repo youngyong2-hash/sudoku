@@ -280,22 +280,45 @@ def try_remove_group(puzzle, group):
     return False
     
 def generate_puzzle(difficulty):
-    needed = {"초급":38, "중급":30, "고급":24}[difficulty]
-    answer = [[0] * 9 for _ in range(9)]
-    solve(answer)
+    needed = {"초급": 38, "중급": 30, "고급": 24}[difficulty]
+    
+    # 1. 고정된 solve() 대신 형이 만든 '행렬 치환 무작위 보드 생성기' 호출!
+    answer = make_random_solution()
     puzzle = [row[:] for row in answer]
-    positions = [(row, col) for row in range(9) for col in range(9)]
-    random.shuffle(positions)
+
+    # 2. 형이 만든 '180도 회전 대칭 그룹'을 가져와서 아름답게 지우기 시작
+    groups = make_rotational_groups()
+    random.shuffle(groups)
+
     left = 81
-    for row, col in positions:
+    for group in groups:
+        # 이 그룹을 다 지웠을 때 남은 단서가 목표치(needed)보다 적어지면 스킵
+        if left - len(group) < needed:
+            continue
+
+        # 유일해가 유지되면 그룹(2칸 또는 중앙 1칸)을 확정적으로 제거
+        if try_remove_group(puzzle, group):
+            left -= len(group)
+
         if left <= needed:
             break
-        old = puzzle[row][col]
-        puzzle[row][col] = 0
-        if count_solutions([r[:] for r in puzzle]) == 1:
-            left -= 1
-        else:
-            puzzle[row][col] = old
+
+    # 3. 미세 조정: 대칭으로 2칸씩 지우다 보면 목표치(예: 30개)와 
+    # 딱 안 떨어질 수 있으니 남은 개수는 무작위로 1칸씩 정밀하게 깎기
+    if left > needed:
+        positions = [(r, c) for r in range(9) for c in range(9) if puzzle[r][c] != 0]
+        random.shuffle(positions)
+        
+        for r, c in positions:
+            if left <= needed:
+                break
+            old = puzzle[r][c]
+            puzzle[r][c] = 0
+            if count_solutions([row[:] for row in puzzle], limit=2) == 1:
+                left -= 1
+            else:
+                puzzle[r][c] = old
+
     return puzzle, answer
 
 def find_rule_errors(board):
@@ -405,7 +428,7 @@ def make_pdf(board, date_value, difficulty):
     width, height = A4
 
     # 기존 160mm → 절반인 80mm로 축소
-    size = 80 * mm
+    size = 99 * mm
     cell = size / 9
 
     # A4 용지 정중앙 배치
