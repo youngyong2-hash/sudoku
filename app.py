@@ -7,7 +7,6 @@ import datetime
 from typing import Literal, Optional
 
 import streamlit as st
-import pandas as pd
 from PIL import Image, ImageDraw, ImageOps, ImageFont
 from streamlit_cropperjs import st_cropperjs
 from google import genai
@@ -22,7 +21,7 @@ from reportlab.pdfgen import canvas
 # ------------------------------------------------------------------------------
 # 1. App configuration
 # ------------------------------------------------------------------------------
-st.set_page_config(page_title="Miracle Morning Sudoku by youngyong", page_icon="🧩", layout="centered")
+st.set_page_config(page_title="Miracle Morning SUDOKU", page_icon="🧩", layout="centered")
 
 st.markdown(
     """
@@ -31,6 +30,7 @@ st.markdown(
         .stApp { max-width: 100%; padding-left: 0.5rem; padding-right: 0.5rem; }
         iframe { max-width: 100% !important; width: 100% !important; }
         img { max-width: 100% !important; height: auto !important; }
+
         .home-button-wrap { text-align: center; margin: 20px 0 8px 0; }
         .home-button-wrap a { text-decoration: none; }
         .home-button-wrap button {
@@ -44,6 +44,54 @@ st.markdown(
             cursor: pointer;
         }
         .home-button-wrap button:hover { background: #edeae5; }
+
+        /* ---------------------------------------------------------------
+           9x9 판독 결과 격자 스타일링
+           - 열 번호(헤더) 없음
+           - 셀 내부 텍스트 가운데 정렬
+           - 3행 단위 밴드마다 굵은 테두리 박스로 구분 (가로 3x3 분리 효과)
+           - 3열, 6열 뒤에 굵은 세로선 (세로 3x3 분리 효과)
+           - 휴대폰 폭에 맞게 셀 간격/여백 최소화
+        --------------------------------------------------------------- */
+        .st-key-sudoku_band_0,
+        .st-key-sudoku_band_1,
+        .st-key-sudoku_band_2 {
+            border: 2px solid #222 !important;
+            border-radius: 6px !important;
+            padding: 3px !important;
+            margin-bottom: 3px !important;
+        }
+        .st-key-sudoku_band_0 div[data-testid="stHorizontalBlock"],
+        .st-key-sudoku_band_1 div[data-testid="stHorizontalBlock"],
+        .st-key-sudoku_band_2 div[data-testid="stHorizontalBlock"] {
+            gap: 2px !important;
+        }
+        .st-key-sudoku_band_0 div[data-testid="column"],
+        .st-key-sudoku_band_1 div[data-testid="column"],
+        .st-key-sudoku_band_2 div[data-testid="column"] {
+            padding: 0 !important;
+            min-width: 0 !important;
+        }
+        .st-key-sudoku_band_0 input,
+        .st-key-sudoku_band_1 input,
+        .st-key-sudoku_band_2 input {
+            text-align: center !important;
+            padding: 4px 0 !important;
+            font-size: 17px !important;
+            font-weight: 700 !important;
+            height: 38px !important;
+            border: 1px solid #ccc !important;
+            border-radius: 4px !important;
+        }
+        /* 3열, 6열 뒤에 굵은 세로 구분선 */
+        .st-key-sudoku_band_0 div[data-testid="stHorizontalBlock"] > div:nth-of-type(3) input,
+        .st-key-sudoku_band_0 div[data-testid="stHorizontalBlock"] > div:nth-of-type(6) input,
+        .st-key-sudoku_band_1 div[data-testid="stHorizontalBlock"] > div:nth-of-type(3) input,
+        .st-key-sudoku_band_1 div[data-testid="stHorizontalBlock"] > div:nth-of-type(6) input,
+        .st-key-sudoku_band_2 div[data-testid="stHorizontalBlock"] > div:nth-of-type(3) input,
+        .st-key-sudoku_band_2 div[data-testid="stHorizontalBlock"] > div:nth-of-type(6) input {
+            border-right: 3px solid #222 !important;
+        }
     </style>
     """,
     unsafe_allow_html=True,
@@ -60,10 +108,9 @@ MODEL_CANDIDATES = [
 
 
 def render_home_button(key_suffix: str):
-    """결과/PDF 화면 아래에 배치하는, 새로고침 없이 맨 위로 이동하는 홈 버튼."""
     st.markdown(
-        f'<div class="home-button-wrap"><a href="#app-top"><button type="button">'
-        f"🏠 처음 화면으로 돌아가기</button></a></div>",
+        '<div class="home-button-wrap"><a href="#app-top"><button type="button">'
+        "🏠 처음 화면으로 돌아가기</button></a></div>",
         unsafe_allow_html=True,
     )
 
@@ -538,6 +585,11 @@ def clear_ocr_state():
         st.session_state.pop(key, None)
 
 
+def parse_cell_value(raw: str) -> int:
+    raw = (raw or "").strip()
+    return int(raw) if raw in "123456789" else 0
+
+
 # ------------------------------------------------------------------------------
 # 7. Main UI
 # ------------------------------------------------------------------------------
@@ -600,6 +652,7 @@ with tab1:
                             grid, used_model = ocr_sudoku_grid(client, target_img)
                             st.session_state["ocr_grid"] = grid
                             st.session_state["ocr_used_model"] = used_model
+                            st.session_state["ocr_run_id"] = st.session_state.get("ocr_run_id", 0) + 1
                             st.session_state.pop("ocr_result", None)
                         except Exception as error:
                             st.error(f"판독 중 오류가 발생했습니다: {error}")
@@ -608,26 +661,30 @@ with tab1:
                     st.markdown("---")
                     st.subheader("3. AI 판독 결과 확인 및 수정")
                     st.caption(
-                        "AI가 읽은 숫자가 아래 표에 채워져 있습니다. "
-                        "손글씨를 잘못 읽은 칸이 있다면 표를 직접 눌러 수정하세요. 빈칸은 비워두면 됩니다."
+                        "AI가 읽은 숫자가 아래 9×9 판에 채워져 있습니다. "
+                        "잘못 읽힌 칸을 눌러 숫자를 고치거나, 빈칸으로 두려면 지워주세요."
                     )
 
-                    editor_key = f"grid_editor_{st.session_state.get('last_crop_hash', 'default')}"
-                    grid_df = pd.DataFrame(
-                        st.session_state["ocr_grid"],
-                        columns=[str(i) for i in range(1, 10)],
-                    ).replace(0, pd.NA)
+                    run_id = st.session_state.get("ocr_run_id", 0)
+                    ocr_grid = st.session_state["ocr_grid"]
+                    edited_grid = [[0] * 9 for _ in range(9)]
 
-                    edited_df = st.data_editor(
-                        grid_df,
-                        hide_index=True,
-                        use_container_width=True,
-                        column_config={
-                            col: st.column_config.NumberColumn(col, min_value=1, max_value=9, step=1)
-                            for col in grid_df.columns
-                        },
-                        key=editor_key,
-                    )
+                    for band_index, (row_start, row_end) in enumerate([(0, 3), (3, 6), (6, 9)]):
+                        with st.container(border=True, key=f"sudoku_band_{band_index}"):
+                            for r in range(row_start, row_end):
+                                cols = st.columns(9, gap="small")
+                                for c in range(9):
+                                    default_value = ocr_grid[r][c]
+                                    default_str = str(default_value) if default_value else ""
+                                    with cols[c]:
+                                        raw_value = st.text_input(
+                                            f"{r + 1}행 {c + 1}열",
+                                            value=default_str,
+                                            max_chars=1,
+                                            key=f"cell_{run_id}_{r}_{c}",
+                                            label_visibility="collapsed",
+                                        )
+                                    edited_grid[r][c] = parse_cell_value(raw_value)
 
                     used_model = st.session_state.get("ocr_used_model")
                     if used_model:
@@ -644,7 +701,6 @@ with tab1:
                             st.rerun()
 
                     if confirmed:
-                        edited_grid = edited_df.fillna(0).astype(int).values.tolist()
                         violations = find_rule_violations(edited_grid)
                         is_complete = all(
                             edited_grid[r][c] != 0 for r in range(9) for c in range(9)
@@ -703,7 +759,6 @@ with tab1:
                                     "일부 숫자가 잘못 판독되었을 수 있으니 표를 다시 확인해 주세요."
                                 )
 
-                        # 결과 화면 맨 아래 — 처음 화면으로 돌아가는 버튼
                         render_home_button("tab1_result")
         else:
             st.info("사진을 확대·축소·이동해 스도쿠 9×9 영역에 맞춘 뒤, 위 버튼으로 잘라내기를 완료하세요.")
@@ -778,7 +833,6 @@ with tab2:
         key="gen_pdf_download",
     )
 
-    # 생성된 문제 섹션 맨 아래 — 처음 화면으로 돌아가는 버튼
     render_home_button("tab2_generated")
 
     st.markdown("---")
@@ -844,7 +898,6 @@ with tab2:
             key="saved_pdf_download",
         )
 
-        # 저장된 문제 섹션 맨 아래 — 처음 화면으로 돌아가는 버튼
         render_home_button("tab2_saved")
     else:
         st.info("선택한 난이도에 저장된 스도쿠 문제가 없습니다. 위에서 새 문제를 만들어 보세요!")
