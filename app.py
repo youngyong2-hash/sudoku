@@ -422,6 +422,7 @@ def save_puzzle(difficulty, puzzle, answer):
     created_at = dt.datetime.now(
         ZoneInfo("Asia/Seoul")
     ).strftime("%Y-%m-%d %H:%M:%S KST")
+
     worksheet.append_row([
         new_id,
         difficulty,
@@ -429,7 +430,6 @@ def save_puzzle(difficulty, puzzle, answer):
         json.dumps(answer),
         created_at,
     ])
-
 """def load_puzzles(difficulty=None):
     try:
         items = json.loads(DB_FILE.read_text(encoding="utf-8")) if DB_FILE.exists() else []
