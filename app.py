@@ -31,10 +31,9 @@ st.markdown(
         iframe { max-width: 100% !important; width: 100% !important; }
         img { max-width: 100% !important; height: auto !important; }
 
-        /* 제목이 휴대폰 화면 폭에 맞춰 자동으로 축소되어 한 줄을 유지하도록 처리 */
         .app-title {
-            font-size: clamp(1.15rem, 4.5vw, 2.4rem);
-            font-weight: 600;
+            font-size: clamp(1.15rem, 6.2vw, 2.4rem);
+            font-weight: 800;
             letter-spacing: -0.02em;
             white-space: nowrap;
             overflow-x: hidden;
@@ -56,7 +55,12 @@ st.markdown(
         }
         .home-button-wrap button:hover { background: #edeae5; }
 
-        /* 9x9 판독 결과 격자 스타일링 */
+        /* ---------------------------------------------------------------
+           9x9 판독 결과 격자 스타일링
+           Streamlit은 640px 미만 화면에서 st.columns()를 자동으로 세로 스택으로
+           바꾸고, 컬럼 너비를 인라인 style로 지정한다. 이를 강제로 무시하고
+           휴대폰에서도 항상 가로 9칸이 유지되도록 !important로 덮어쓴다.
+        --------------------------------------------------------------- */
         .st-key-sudoku_band_0,
         .st-key-sudoku_band_1,
         .st-key-sudoku_band_2 {
@@ -65,28 +69,42 @@ st.markdown(
             padding: 3px !important;
             margin-bottom: 3px !important;
         }
+
+        /* 행 컨테이너: 폭에 관계없이 항상 가로 배치, 줄바꿈 금지 */
         .st-key-sudoku_band_0 div[data-testid="stHorizontalBlock"],
         .st-key-sudoku_band_1 div[data-testid="stHorizontalBlock"],
         .st-key-sudoku_band_2 div[data-testid="stHorizontalBlock"] {
+            display: flex !important;
+            flex-direction: row !important;
+            flex-wrap: nowrap !important;
             gap: 2px !important;
+            width: 100% !important;
         }
+
+        /* 각 셀 컬럼: 인라인 style로 지정된 폭/플렉스를 무시하고 1/9 폭으로 고정 */
         .st-key-sudoku_band_0 div[data-testid="column"],
         .st-key-sudoku_band_1 div[data-testid="column"],
         .st-key-sudoku_band_2 div[data-testid="column"] {
-            padding: 0 !important;
+            width: 11.111% !important;
+            flex: 1 1 11.111% !important;
+            max-width: 11.111% !important;
             min-width: 0 !important;
+            padding: 0 !important;
         }
+
         .st-key-sudoku_band_0 input,
         .st-key-sudoku_band_1 input,
         .st-key-sudoku_band_2 input {
             text-align: center !important;
             padding: 4px 0 !important;
-            font-size: 17px !important;
+            font-size: 15px !important;
             font-weight: 700 !important;
-            height: 38px !important;
+            height: 36px !important;
             border: 1px solid #ccc !important;
             border-radius: 4px !important;
         }
+
+        /* 3열, 6열 뒤에 굵은 세로 구분선 */
         .st-key-sudoku_band_0 div[data-testid="stHorizontalBlock"] > div:nth-of-type(3) input,
         .st-key-sudoku_band_0 div[data-testid="stHorizontalBlock"] > div:nth-of-type(6) input,
         .st-key-sudoku_band_1 div[data-testid="stHorizontalBlock"] > div:nth-of-type(3) input,
@@ -111,8 +129,6 @@ LOCAL_PUZZLE_FILE = "puzzles_db.json"
 DRIVE_FILE_NAME = "puzzles_db.json"
 DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 
-# secrets.toml에 [gcp_service_account]와 DRIVE_FOLDER_ID가 모두 설정되어 있으면
-# 구글 드라이브를 저장소로 사용하고, 없으면 로컬 JSON 파일로 자동 대체(fallback)한다.
 DRIVE_ENABLED = bool(st.secrets.get("gcp_service_account")) and bool(st.secrets.get("DRIVE_FOLDER_ID"))
 
 if DRIVE_ENABLED:
@@ -667,7 +683,7 @@ def parse_cell_value(raw: str) -> int:
 # 7. Main UI
 # ------------------------------------------------------------------------------
 st.markdown('<div id="app-top"></div>', unsafe_allow_html=True)
-st.markdown('<h1 class="app-title">🏄 Miracle Morning SUDOKU</h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="app-title">🧩 Miracle Morning SUDOKU</h1>', unsafe_allow_html=True)
 
 st.sidebar.caption(
     "☁️ 구글 드라이브에 저장 중입니다." if DRIVE_ENABLED
