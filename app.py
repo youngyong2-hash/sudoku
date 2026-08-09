@@ -667,7 +667,7 @@ def parse_cell_value(raw: str) -> int:
 # 7. Main UI
 # ------------------------------------------------------------------------------
 st.markdown('<div id="app-top"></div>', unsafe_allow_html=True)
-st.markdown('<h1 class="app-title">🏄 Miracle Morning SUDOKU by Y.Y</h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="app-title">🏄 Miracle Morning SUDOKU</h1>', unsafe_allow_html=True)
 
 st.sidebar.caption(
     "☁️ 구글 드라이브에 저장 중입니다." if DRIVE_ENABLED
