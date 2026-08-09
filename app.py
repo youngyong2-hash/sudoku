@@ -45,6 +45,30 @@ def get_worksheet():
 # 설정
 # =============================================================================
 st.set_page_config(page_title="영용's Sudoku", page_icon="🏄", layout="centered")
+
+def check_password():
+    def password_entered():
+        if st.session_state["password"] == st.secrets["auth"]["password"]:
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]
+        else:
+            st.session_state["password_correct"] = False
+
+    if st.session_state.get("password_correct", False):
+        return True
+
+    st.text_input("비밀번호를 입력하세요", type="password", on_change=password_entered, key="password")
+
+    if "password_correct" in st.session_state and not st.session_state["password_correct"]:
+        st.error("비밀번호가 틀렸습니다.")
+
+    return False
+
+
+if not check_password():
+    st.stop()
+
+
 st.markdown("""
 <style>
 .stApp {max-width:100%; padding-left:.5rem; padding-right:.5rem;}
