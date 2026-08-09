@@ -594,7 +594,7 @@ def parse_cell_value(raw: str) -> int:
 # 7. Main UI
 # ------------------------------------------------------------------------------
 st.markdown('<div id="app-top"></div>', unsafe_allow_html=True)
-st.title("🧩 스도쿠 AI 스마트 도우미")
+st.title("🏄 Miracle Morning SUDOKU")
 
 api_key = get_api_key()
 if not api_key:
