@@ -449,7 +449,7 @@ with tab1:
 
                     try:
                         response = client.models.generate_content(
-                            model="gemini-2.5-flash",
+                            model="gemini-3.5-flash",
                             contents=[api_img, "이 스도쿠 판의 틀린 손글씨 위치와 바로 해결 가능한 단 하나의 힌트를 JSON으로 출력하세요."],
                             config=types.GenerateContentConfig(
                                 system_instruction=system_prompt,
