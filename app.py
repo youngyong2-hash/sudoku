@@ -303,3 +303,191 @@ with tab1:
     if img_file is not None:
         file_bytes = img_file.getvalue()
         file_hash = hashlib.md5(file_bytes).hexdigest()
+
+        # 파일명이 같아도 실제 내용이 다르면(재촬영 등) 새 업로드로 인식
+        if st.session_state.get("last_uploaded_file_hash") != file_hash:
+            st.session_state["last_uploaded_file_hash"] = file_hash
+            st.session_state["rotate_angle"] = 0
+            st.session_state.pop("ai_analysis_result", None)
+            st.session_state.pop("last_cropped_hash", None)
+
+        try:
+            raw_image = Image.open(img_file)
+            raw_image.verify()
+            raw_image = Image.open(img_file)  # verify() 이후 재오픈 필요
+        except Exception:
+            st.error("이미지 파일을 열 수 없습니다. 다른 파일을 업로드해 주세요.")
+            st.stop()
+
+        working_img = compress_for_display(raw_image, max_dim=350)
+
+        if "rotate_angle" not in st.session_state:
+            st.session_state["rotate_angle"] = 0
+
+        st.subheader("2. 사진 방향 및 영역 설정")
+        col_rot1, col_rot2 = st.columns(2)
+        with col_rot1:
+            if st.button("🔄 90° 회전"):
+                st.session_state["rotate_angle"] = (st.session_state["rotate_angle"] - 90) % 360
+                st.session_state.pop("ai_analysis_result", None)
+        with col_rot2:
+            if st.button("↩️ 방향 초기화"):
+                st.session_state["rotate_angle"] = 0
+                st.session_state.pop("ai_analysis_result", None)
+
+        if st.session_state["rotate_angle"] != 0:
+            working_img = working_img.rotate(st.session_state["rotate_angle"], expand=True)
+
+        use_cropper = st.checkbox("✂️ 빨간 박스로 9x9 잘라내기 사용", value=True)
+        if st.session_state.get("last_use_cropper") != use_cropper:
+            st.session_state["last_use_cropper"] = use_cropper
+            st.session_state.pop("ai_analysis_result", None)
+
+        target_img = working_img
+        if use_cropper:
+            st.write("📱 모서리를 조절해 9x9 영역에 맞추세요.")
+            target_img = st_cropper(
+                working_img,
+                realtime_update=True,
+                box_color='#FF0000',
+                aspect_ratio=(1, 1),
+                key="cropper_widget",
+            )
+
+            # PIL 이미지는 identity 비교라 항상 "다름"으로 판정되는 문제가 있어
+            # 픽셀 해시로 실제 변경 여부를 판단
+            current_hash = image_hash(target_img)
+            if st.session_state.get("last_cropped_hash") != current_hash:
+                st.session_state["last_cropped_hash"] = current_hash
+                st.session_state.pop("ai_analysis_result", None)
+
+        if target_img:
+            st.image(target_img, caption="최종 분석 영역", use_container_width=True)
+
+            if st.button("💡 도움받기 (단 하나의 힌트 & 검증)", type="primary"):
+                with st.spinner("Gemini AI가 정밀 분석 중입니다..."):
+                    system_prompt = """
+                    당신은 엄격하고 명확한 스도쿠 검증 튜터입니다.
+                    업로드된 이미지에서 9x9 스도쿠 판(인쇄체 및 손글씨)을 분석하세요.
+
+                    [주의 규칙]
+                    1. errors: 손글씨 중 스도쿠 규칙에 위배되는(틀린) 숫자의 위치(row, col)를 기록하세요. 없으면 빈 배열을 반환하세요.
+                    2. single_hint: 현재 확실히 바로 채울 수 있는 '단 한 칸'의 위치, 정답 숫자, 이유를 제시하세요. 확신이 없으면 null로 두세요.
+                    3. row, col은 1~9 범위의 정수입니다.
+                    """
+
+                    # 화면 표시용(저해상도)과 별개로, API 전송에는 고해상도 버전 사용
+                    api_img = prepare_for_api(target_img, max_dim=768)
+
+                    try:
+                        response = client.models.generate_content(
+                            model="gemini-2.5-flash",
+                            contents=[api_img, "이 스도쿠 판의 틀린 손글씨 위치와 바로 해결 가능한 단 하나의 힌트를 JSON으로 출력하세요."],
+                            config=types.GenerateContentConfig(
+                                system_instruction=system_prompt,
+                                temperature=0.1,
+                                response_mime_type="application/json",
+                                response_schema=SudokuAnalysis,
+                            ),
+                        )
+
+                        if response and response.text:
+                            try:
+                                parsed = SudokuAnalysis.model_validate_json(response.text)
+                                st.session_state["ai_analysis_result"] = parsed.model_dump()
+                                st.session_state["cropped_img_for_display"] = target_img
+                            except Exception as parse_err:
+                                st.error(f"AI 응답 형식이 올바르지 않습니다: {parse_err}")
+                        else:
+                            st.error("분석 응답을 불러오지 못했습니다. 다시 한번 시도해 주세요.")
+
+                    except json.JSONDecodeError:
+                        st.error("AI가 유효한 JSON을 반환하지 않았습니다. 다시 시도해 주세요.")
+                    except Exception as e:
+                        st.error(f"API 호출 중 오류가 발생했습니다: {e}")
+
+            if "ai_analysis_result" in st.session_state and "cropped_img_for_display" in st.session_state:
+                result = st.session_state["ai_analysis_result"]
+                saved_img = st.session_state["cropped_img_for_display"]
+
+                errors = result.get("errors", [])
+                hint = result.get("single_hint")
+
+                st.markdown("---")
+
+                if errors:
+                    st.error(f"⚠️ **검증 결과:** 손글씨 중 틀린 부분이 {len(errors)}곳 발견되었습니다!")
+                    annotated_image = draw_errors_on_image(saved_img, errors)
+                    st.image(annotated_image, caption="❌ 틀린 위치가 빨간색 X로 표시되었습니다", use_container_width=True)
+
+                    for err in errors:
+                        st.write(f"- **{err.get('row')}행 {err.get('col')}열**: {err.get('reason')}")
+                else:
+                    st.success("✅ **검증 결과:** 현재 적힌 손글씨 중 규칙에 위배되는 숫자가 없습니다!")
+
+                if hint:
+                    st.subheader("💡 바로 해결 가능한 한 칸 힌트")
+                    st.info(
+                        f"👉 **위치:** **{hint.get('row')}행 {hint.get('col')}열**\n\n"
+                        f"👉 **정답 숫자:** **{hint.get('number')}**\n\n"
+                        f"👉 **풀이 이유:** {hint.get('reason')}"
+                    )
+
+# ==============================================================================
+# TAB 2: 스도쿠 문제 만들기 & 보관함
+# ==============================================================================
+with tab2:
+    st.subheader("🎲 난이도별 스도쿠 문제 생성")
+
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        difficulty = st.selectbox("난이도를 선택하세요", ["초급", "중급", "고급"])
+    with col2:
+        st.write("")
+        st.write("")
+        gen_btn = st.button("문제 생성", type="primary")
+
+    if gen_btn:
+        with st.spinner("유일해를 가지는 문제를 생성하는 중입니다..."):
+            new_puzzle, new_solution = generate_sudoku_puzzle(difficulty)
+        save_puzzle(difficulty, new_puzzle, new_solution)
+        st.session_state["current_puzzle"] = new_puzzle
+        st.session_state["current_solution"] = new_solution
+        st.session_state["current_diff"] = difficulty
+        st.success(f"새로운 {difficulty} 문제가 생성되어 보관함에 저장되었습니다!")
+
+    if "current_puzzle" in st.session_state:
+        st.write(f"### 📋 생성된 문제 ({st.session_state['current_diff']})")
+        show_sol = st.toggle("🔍 정답 보기 (파란색 빈칸 채우기)", key="gen_sol_toggle")
+
+        pz = st.session_state["current_puzzle"]
+        sol = st.session_state["current_solution"] if show_sol else None
+
+        st.markdown(render_sudoku_board_html(pz, solution=sol), unsafe_allow_html=True)
+
+    st.markdown("---")
+    st.subheader("📁 저장된 문제 보관함")
+
+    filter_diff = st.radio("조회할 난이도 선택", ["전체", "초급", "중급", "고급"], horizontal=True)
+    target_diff = None if filter_diff == "전체" else filter_diff
+
+    saved_puzzles = load_puzzles(target_diff)
+
+    if saved_puzzles:
+        st.write(f"총 **{len(saved_puzzles)}개**의 저장된 문제가 있습니다.")
+        selected_idx = st.selectbox(
+            "불러올 문제를 선택하세요",
+            options=list(range(len(saved_puzzles))),
+            format_func=lambda i: f"#{saved_puzzles[i]['id']} [{saved_puzzles[i]['difficulty']}] ({saved_puzzles[i].get('created_at', '')})",
+        )
+
+        p_data = saved_puzzles[selected_idx]
+        pz_saved = p_data["puzzle"]
+        sol_saved = p_data.get("solution") or solve_sudoku_exact(pz_saved)
+
+        show_saved_sol = st.toggle("🔍 저장된 문제 정답 보기", key="saved_sol_toggle")
+
+        sol_param = sol_saved if show_saved_sol else None
+        st.markdown(render_sudoku_board_html(pz_saved, solution=sol_param), unsafe_allow_html=True)
+    else:
+        st.info("선택한 난이도에 저장된 스도쿠 문제가 없습니다. 위에서 새 문제를 만들어 보세요!")
