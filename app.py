@@ -439,29 +439,29 @@ with tab_read:
         if st.session_state["angle"]: work=work.rotate(st.session_state["angle"],expand=True)
         
         crop = st.checkbox(
-    "✂️ 9×9 영역 자르기",
-    value=True,
-    key="crop_enabled",
-)
+        "✂️ 9×9 영역 자르기",
+        value=True,
+        key="crop_enabled",
+        )
 
-if crop:
-    st.info(
-        "📱 사진을 손가락으로 확대·축소하거나 이동한 뒤, "
-        "빨간 영역이 스도쿠 전체 9×9 격자에 맞도록 조절하세요."
-    )
+    if crop:
+        st.info(
+            "📱 사진을 손가락으로 확대·축소하거나 이동한 뒤, "
+            "빨간 영역이 스도쿠 전체 9×9 격자에 맞도록 조절하세요."
+        )
 
-    image_buffer = io.BytesIO()
-    work.save(image_buffer, format="PNG")
+        image_buffer = io.BytesIO()
+        work.save(image_buffer, format="PNG")
+    
+        target = st_cropperjs(
+            pic=image_buffer.getvalue(),
+            btn_text="✅ 이 영역으로 확정",
+            key="mobile_sudoku_cropper",
+        )
 
-    target = st_cropperjs(
-        pic=image_buffer.getvalue(),
-        btn_text="✅ 이 영역으로 확정",
-        key="mobile_sudoku_cropper",
-    )
-
-else: target = work
-        
-            if target:
+    else: target = work
+            
+     if target:
             current_hash=digest_image(target)
             if st.session_state.get("crop_hash") != current_hash:
                 st.session_state["crop_hash"]=current_hash
