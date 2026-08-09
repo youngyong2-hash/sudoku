@@ -63,7 +63,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 st.markdown("<h1 class='app-title'>🏄영용's Sudoku</h1>", unsafe_allow_html=True)
 
-DB_FILE = Path("puzzles_db.json")
+#DB_FILE = Path("puzzles_db.json")
 MAX_IMAGE_DIM = 768
 DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 
@@ -414,36 +414,35 @@ def load_puzzles(difficulty=None):
     return items
 
 
-#def save_puzzle(difficulty, puzzle, answer):
-#    worksheet = get_worksheet()
-#    existing = load_puzzles()
-#    new_id = max([item["id"] for item in existing], default=0) + 1
+"""def save_puzzle(difficulty, puzzle, answer):
+    worksheet = get_worksheet()
+    existing = load_puzzles()
+    new_id = max([item["id"] for item in existing], default=0) + 1
 
-#    created_at = dt.datetime.now(
-#        ZoneInfo("Asia/Seoul")
-#    ).strftime("%Y-%m-%d %H:%M:%S KST")
+    created_at = dt.datetime.now(
+        ZoneInfo("Asia/Seoul")
+    ).strftime("%Y-%m-%d %H:%M:%S KST")
+    worksheet.append_row([
+        new_id,
+        difficulty,
+        json.dumps(puzzle),
+        json.dumps(answer),
+        created_at,
+    ])
 
-#    worksheet.append_row([
-#        new_id,
-#        difficulty,
-#        json.dumps(puzzle),
-#        json.dumps(answer),
-#        created_at,
-#    ])
-
-#def load_puzzles(difficulty=None):
-#    try:
-#        items = json.loads(DB_FILE.read_text(encoding="utf-8")) if DB_FILE.exists() else []
-#        return [item for item in items if item.get("difficulty") == difficulty] if difficulty else items
-#    except (OSError, json.JSONDecodeError):
-#        return []
+def load_puzzles(difficulty=None):
+    try:
+        items = json.loads(DB_FILE.read_text(encoding="utf-8")) if DB_FILE.exists() else []
+        return [item for item in items if item.get("difficulty") == difficulty] if difficulty else items
+    except (OSError, json.JSONDecodeError):
+        return []
 
 def save_puzzle(difficulty, puzzle, answer):
     items = load_puzzles()
     items.append({"id":max([item.get("id",0) for item in items], default=0)+1,"difficulty":difficulty,"puzzle":puzzle,"solution":answer,"created_at": dt.datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M:%S KST")})
     tmp = DB_FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(DB_FILE)
+    tmp.replace(DB_FILE)"""
 
 # =============================================================================
 # 화면 표 / PDF / PNG
