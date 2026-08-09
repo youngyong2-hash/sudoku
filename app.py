@@ -21,13 +21,13 @@ from reportlab.pdfgen import canvas
 # ------------------------------------------------------------------------------
 # 1. App configuration
 # ------------------------------------------------------------------------------
-st.set_page_config(page_title="Miracle Morning SUDOKU", page_icon="🧩", layout="centered")
+st.set_page_config(page_title="YOUNGYONG SUDOKU", page_icon="🏄", layout="centered")
 
 st.markdown(
     """
     <style>
         html { scroll-behavior: smooth; }
-        .stApp { max-width: 100%; padding-left: 0.5rem; padding-right: 0.5rem; }
+        .stApp { max-width: 100%; padding-left: 0.5rem; padding-right: 0.5rem; overflow-x: hidden; }
         iframe { max-width: 100% !important; width: 100% !important; }
         img { max-width: 100% !important; height: auto !important; }
 
@@ -57,60 +57,83 @@ st.markdown(
 
         /* ---------------------------------------------------------------
            9x9 판독 결과 격자 스타일링
-           Streamlit은 640px 미만 화면에서 st.columns()를 자동으로 세로 스택으로
-           바꾸고, 컬럼 너비를 인라인 style로 지정한다. 이를 강제로 무시하고
-           휴대폰에서도 항상 가로 9칸이 유지되도록 !important로 덮어쓴다.
+           - Streamlit 버전마다 컬럼의 data-testid 값이 "column" / "stColumn"
+             등으로 다를 수 있어, 속성 이름에 의존하지 않고 "가로줄의 직계
+             자식 div"를 선택해 너비를 강제한다 (버전에 안전한 방식).
+           - 각 칸은 aspect-ratio로 항상 정사각형을 유지한다.
         --------------------------------------------------------------- */
-        .st-key-sudoku_band_0,
-        .st-key-sudoku_band_1,
-        .st-key-sudoku_band_2 {
+        .st-key-_band_0,
+        .st-key-_band_1,
+        .st-key-_band_2 {
             border: 2px solid #222 !important;
             border-radius: 6px !important;
             padding: 3px !important;
             margin-bottom: 3px !important;
+            max-width: 100% !important;
+            overflow: hidden !important;
         }
 
-        /* 행 컨테이너: 폭에 관계없이 항상 가로 배치, 줄바꿈 금지 */
-        .st-key-sudoku_band_0 div[data-testid="stHorizontalBlock"],
-        .st-key-sudoku_band_1 div[data-testid="stHorizontalBlock"],
-        .st-key-sudoku_band_2 div[data-testid="stHorizontalBlock"] {
+        /* 행 컨테이너: 항상 가로 배치, 줄바꿈 금지, 폭 100% 고정 */
+        .st-key-_band_0 div[data-testid="stHorizontalBlock"],
+        .st-key-_band_1 div[data-testid="stHorizontalBlock"],
+        .st-key-_band_2 div[data-testid="stHorizontalBlock"] {
             display: flex !important;
             flex-direction: row !important;
             flex-wrap: nowrap !important;
-            gap: 2px !important;
             width: 100% !important;
+            max-width: 100% !important;
+            gap: 2px !important;
         }
 
-        /* 각 셀 컬럼: 인라인 style로 지정된 폭/플렉스를 무시하고 1/9 폭으로 고정 */
-        .st-key-sudoku_band_0 div[data-testid="column"],
-        .st-key-sudoku_band_1 div[data-testid="column"],
-        .st-key-sudoku_band_2 div[data-testid="column"] {
+        /* 가로줄의 "직계 자식 div"를 전부 선택 — data-testid 이름이 바뀌어도 항상 매칭됨 */
+        .st-key-_band_0 div[data-testid="stHorizontalBlock"] > div,
+        .st-key-_band_1 div[data-testid="stHorizontalBlock"] > div,
+        .st-key-_band_2 div[data-testid="stHorizontalBlock"] > div {
             width: 11.111% !important;
             flex: 1 1 11.111% !important;
             max-width: 11.111% !important;
             min-width: 0 !important;
             padding: 0 !important;
+            margin: 0 !important;
+            box-sizing: border-box !important;
         }
 
-        .st-key-sudoku_band_0 input,
-        .st-key-sudoku_band_1 input,
-        .st-key-sudoku_band_2 input {
+        /* 입력창 내부 wrapper의 여백도 제거해 셀 크기 계산이 어긋나지 않도록 함 */
+        .st-key-_band_0 div[data-testid="stTextInput"],
+        .st-key-_band_1 div[data-testid="stTextInput"],
+        .st-key-_band_2 div[data-testid="stTextInput"] {
+            width: 100% !important;
+            margin: 0 !important;
+        }
+        .st-key-_band_0 div[data-testid="stTextInput"] > div,
+        .st-key-_band_1 div[data-testid="stTextInput"] > div,
+        .st-key-_band_2 div[data-testid="stTextInput"] > div {
+            width: 100% !important;
+        }
+
+        /* 실제 입력창: 정사각형(aspect-ratio) + 가운데 정렬 + 반응형 글자 크기 */
+        .st-key-_band_0 input,
+        .st-key-_band_1 input,
+        .st-key-_band_2 input {
+            width: 100% !important;
+            aspect-ratio: 1 / 1 !important;
+            height: auto !important;
             text-align: center !important;
-            padding: 4px 0 !important;
-            font-size: 15px !important;
+            padding: 0 !important;
+            font-size: clamp(11px, 4.2vw, 18px) !important;
             font-weight: 700 !important;
-            height: 36px !important;
             border: 1px solid #ccc !important;
             border-radius: 4px !important;
+            box-sizing: border-box !important;
         }
 
         /* 3열, 6열 뒤에 굵은 세로 구분선 */
-        .st-key-sudoku_band_0 div[data-testid="stHorizontalBlock"] > div:nth-of-type(3) input,
-        .st-key-sudoku_band_0 div[data-testid="stHorizontalBlock"] > div:nth-of-type(6) input,
-        .st-key-sudoku_band_1 div[data-testid="stHorizontalBlock"] > div:nth-of-type(3) input,
-        .st-key-sudoku_band_1 div[data-testid="stHorizontalBlock"] > div:nth-of-type(6) input,
-        .st-key-sudoku_band_2 div[data-testid="stHorizontalBlock"] > div:nth-of-type(3) input,
-        .st-key-sudoku_band_2 div[data-testid="stHorizontalBlock"] > div:nth-of-type(6) input {
+        .st-key-_band_0 div[data-testid="stHorizontalBlock"] > div:nth-of-type(3) input,
+        .st-key-_band_0 div[data-testid="stHorizontalBlock"] > div:nth-of-type(6) input,
+        .st-key-_band_1 div[data-testid="stHorizontalBlock"] > div:nth-of-type(3) input,
+        .st-key-_band_1 div[data-testid="stHorizontalBlock"] > div:nth-of-type(6) input,
+        .st-key-_band_2 div[data-testid="stHorizontalBlock"] > div:nth-of-type(3) input,
+        .st-key-_band_2 div[data-testid="stHorizontalBlock"] > div:nth-of-type(6) input {
             border-right: 3px solid #222 !important;
         }
     </style>
@@ -245,7 +268,7 @@ def render_home_button(key_suffix: str):
 # ------------------------------------------------------------------------------
 # 2. Gemini response schema (OCR 전용 — 정답 판정/힌트는 로컬 알고리즘이 담당)
 # ------------------------------------------------------------------------------
-class SudokuGridResult(BaseModel):
+class GridResult(BaseModel):
     grid: list[list[int]] = Field(description="9x9 정수 배열. 빈칸은 0.")
     message: str = ""
 
@@ -683,7 +706,7 @@ def parse_cell_value(raw: str) -> int:
 # 7. Main UI
 # ------------------------------------------------------------------------------
 st.markdown('<div id="app-top"></div>', unsafe_allow_html=True)
-st.markdown('<h1 class="app-title">🧩 Miracle Morning SUDOKU</h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="app-title">🏄 YOUNGYONG SUDOKU</h1>', unsafe_allow_html=True)
 
 st.sidebar.caption(
     "☁️ 구글 드라이브에 저장 중입니다." if DRIVE_ENABLED
