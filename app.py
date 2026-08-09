@@ -831,23 +831,23 @@ with tab_manual:
 
                 st.write("한 줄에 9자리씩, 빈칸은 0으로 입력하세요. 예: `310040275`")
 
-        row_texts = []
-        for row in range(9):
-            label_col, input_col = st.columns([1, 5])
-            label_col.markdown(
-                f"<div style='padding-top:0.55rem; font-weight:600;'>{row + 1}행</div>",
-                unsafe_allow_html=True
-            )
-            row_texts.append(
-                input_col.text_input(
-                    label=" ",
-                    value="",
-                    max_chars=9,
-                    key=f"manual_row_{row}",
-                    placeholder="예: 310040275",
-                    label_visibility="collapsed"
-                )
-            )
+                row_texts = []
+                for row in range(9):
+                    label_col, input_col = st.columns([1, 5])
+                    label_col.markdown(
+                        f"<div style='padding-top:0.55rem; font-weight:600;'>{row + 1}행</div>",
+                        unsafe_allow_html=True
+                    )
+                    row_texts.append(
+                        input_col.text_input(
+                            label=" ",
+                            value="",
+                            max_chars=9,
+                            key=f"manual_row_{row}",
+                            placeholder="예: 310040275",
+                            label_visibility="collapsed"
+                        )
+                    )
 
         preview_board, preview_error = parse_row_strings(row_texts)
 
