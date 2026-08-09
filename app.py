@@ -38,7 +38,7 @@ st.markdown("<h1 class='app-title'>🏄영용's Sudoku</h1>", unsafe_allow_html=
 
 PUZZLE_FILE = Path("puzzles_db.json")
 CROPPER_MAX_DIM = 768
-DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 
 
 # =============================================================================
