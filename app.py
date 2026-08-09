@@ -727,28 +727,28 @@ with tab_read:
             grid = validate_grid(SudokuAnalysis.model_validate(st.session_state["analysis"]).grid)
 
             with st.expander("✏️ 사진과 대조하며 잘못 읽은 줄 고치기", expanded=False):
-            st.caption("사진과 대조하면서 잘못 읽은 줄만 고치세요. 한 줄 9자리, 빈칸은 0입니다.")
-        row_inputs = []
-        for r in range(9):
-            row_str = "".join(str(n) for n in grid[r])
-            fixed = st.text_input(f"{r+1}행", value=row_str, max_chars=9, key=f"rowfix_{r}")
-            row_inputs.append(fixed)
+                st.caption("사진과 대조하면서 잘못 읽은 줄만 고치세요. 한 줄 9자리, 빈칸은 0입니다.")
+                row_inputs = []
+                for r in range(9):
+                    row_str = "".join(str(n) for n in grid[r])
+                    fixed = st.text_input(f"{r+1}행", value=row_str, max_chars=9, key=f"rowfix_{r}")
+                    row_inputs.append(fixed)
 
-        if st.button("수정 내용 적용", type="primary", key="apply_row_fix"):
-            try:
-                new_grid = []
-                for r, row_str in enumerate(row_inputs):
-                    cleaned = row_str.strip()
-                    if len(cleaned) != 9 or not cleaned.isdigit():
-                        raise ValueError(f"{r+1}행은 9자리 숫자로 입력해 주세요.")
-                    new_grid.append([int(ch) for ch in cleaned])
-                new_grid = validate_grid(new_grid)
-                st.session_state["analysis"]["grid"] = new_grid
-                st.session_state.pop("celebrated", None)
-                st.success("수정한 내용을 반영했습니다.")
-                st.rerun()
-            except ValueError as error:
-                st.error(str(error))
+                if st.button("수정 내용 적용", type="primary", key="apply_row_fix"):
+                    try:
+                        new_grid = []
+                        for r, row_str in enumerate(row_inputs):
+                            cleaned = row_str.strip()
+                            if len(cleaned) != 9 or not cleaned.isdigit():
+                                raise ValueError(f"{r+1}행은 9자리 숫자로 입력해 주세요.")
+                            new_grid.append([int(ch) for ch in cleaned])
+                        new_grid = validate_grid(new_grid)
+                        st.session_state["analysis"]["grid"] = new_grid
+                        st.session_state.pop("celebrated", None)
+                        st.success("수정한 내용을 반영했습니다.")
+                        st.rerun()
+                    except ValueError as error:
+                        st.error(str(error))
 
             errors = find_rule_errors(grid); complete=all(number != 0 for row in grid for number in row)
             st.markdown("---"); st.subheader("🔎 AI가 읽은 9×9 스도쿠 판")
