@@ -3,12 +3,14 @@ import json
 import random
 import hashlib
 import datetime
+import io  # PDF 데이터를 메모리에 담기 위해 필요
 import streamlit as st
 from PIL import Image, ImageDraw, ImageOps
 from streamlit_cropper import st_cropper
 from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
+from fpdf import FPDF  # PDF 생성을 위한 라이브러리
 
 # ------------------------------------------------------------------------------
 # 1. 페이지 기본 설정 및 모바일 UI CSS
@@ -130,7 +132,7 @@ def save_puzzle(difficulty, puzzle, solution):
 
 
 # ------------------------------------------------------------------------------
-# 3. 핵심 알고리즘 (생성/검증/시각화)
+# 3. 핵심 알고리즘 (생성/검증/시각화/PDF)
 # ------------------------------------------------------------------------------
 def is_valid(board, row, col, num):
     for i in range(9):
@@ -215,6 +217,7 @@ def generate_sudoku_puzzle(difficulty, max_attempts=200):
 
     puzzle = [row[:] for row in full_board]
     positions = [(r, c) for r in range(9) for c in range(9)]
+    # 인쇄용 PDF 생성 시에도 랜덤성을 주기 위해 positions를 한번 더 섞음
     random.shuffle(positions)
 
     removed = 0
@@ -284,6 +287,71 @@ def draw_errors_on_image(image, error_cells):
             draw.line([(x1, y2), (x2, y1)], fill="red", width=stroke_width)
 
     return annotated
+
+# [신규 추가] 인쇄용 A4 PDF를 생성하는 핵심 helper 함수
+def create_daily_sudoku_pdf(puzzle, difficulty):
+    """
+    A4 사이즈 종이에 제목, 날짜 입력란, 그리고 가운데 정렬된 스도쿠 판을 배치한 PDF 생성
+    """
+    pdf = FPDF(orientation='P', unit='mm', format='A4')
+    pdf.add_page()
+    
+    # 폰트 설정 (기본 가변 폰트 사용, 한글 제목은 fpdf 기본 폰트 제약상 영어로 설정)
+    pdf.set_font("Helvetica", 'B', 24)
+    
+    # 제목: Daily Sudoku Puzzle
+    pdf.cell(0, 20, "Daily Sudoku Puzzle", ln=True, align='C')
+    
+    # 난이도 및 날짜 기입란 (약간 아래로)
+    pdf.set_font("Helvetica", '', 12)
+    pdf.ln(5)
+    
+    # 날짜 기입란: ____년 __월 __일 (한글 대신 점선으로 처리)
+    # 구글 fpdf 기본 한글 폰트 미지원으로, 사용자 기입 형식으로 디자인
+    pdf.cell(0, 10, f"Difficulty: {difficulty}      Date: ____ / ____ / ____", ln=True, align='C')
+    
+    # 스도쿠 판 그리기 (A4 가로폭 210mm, 양쪽 마진 감안하여 판 크기 설정)
+    grid_size_mm = 160  # 전체 스도쿠 판 크기 (16cm x 16cm)
+    cell_size_mm = grid_size_mm / 9
+    
+    # 판을 가운데 정렬하기 위한 시작 좌표 계산
+    # (A4 가로 210 - 판크기 160) / 2 = 25mm 마진
+    # (A4 세로 297 - 판크기 160 - 제목영역 약 50) / 2 -> 제목 아래 적당한 위치로 고정
+    start_x = (210 - grid_size_mm) / 2
+    start_y = 60 # 제목 영역 아래 6cm 지점부터 시작
+    
+    # 숫자 그리기 및 일반 격자
+    pdf.set_font("Helvetica", 'B', 20)
+    pdf.set_line_width(0.2) # 일반 격자 두께
+    
+    for r in range(9):
+        # Y 좌표 이동
+        pdf.set_xy(start_x, start_y + (r * cell_size_mm))
+        for c in range(9):
+            val = puzzle[r][c]
+            txt = str(val) if val != 0 else ""
+            
+            # 셀 그리기 (테두리 포함)
+            pdf.cell(cell_size_mm, cell_size_mm, txt, border=1, ln=0, align='C')
+            
+    # 3x3 박스 굵은 테두리 덧그리기 (X, Y축 반복문 활용)
+    pdf.set_line_width(0.8) # 3x3 굵은 테두리 두께
+    pdf.set_draw_color(34, 34, 34) # 약간 짙은 회색/검정
+    
+    # 굵은 가로선
+    for i in range(4): # 0, 3, 6, 9 인덱스 위치
+        pdf.line(start_x, start_y + (i * 3 * cell_size_mm), 
+                 start_x + grid_size_mm, start_y + (i * 3 * cell_size_mm))
+                 
+    # 굵은 세로선
+    for i in range(4): # 0, 3, 6, 9 인덱스 위치
+        pdf.line(start_x + (i * 3 * cell_size_mm), start_y, 
+                 start_x + (i * 3 * cell_size_mm), start_y + grid_size_mm)
+                 
+    # PDF 데이터를 메모리 버퍼로 반환
+    # fpdf2 최신 버전에서는 output(dest='S') 대신 bytes 반환 방식을 권장
+    pdf_bytes = pdf.output()
+    return pdf_bytes
 
 
 # ------------------------------------------------------------------------------
@@ -485,9 +553,33 @@ with tab2:
         pz_saved = p_data["puzzle"]
         sol_saved = p_data.get("solution") or solve_sudoku_exact(pz_saved)
 
-        show_saved_sol = st.toggle("🔍 저장된 문제 정답 보기", key="saved_sol_toggle")
-
-        sol_param = sol_saved if show_saved_sol else None
-        st.markdown(render_sudoku_board_html(pz_saved, solution=sol_param), unsafe_allow_html=True)
+        # 보관함 하단 버튼 배치 (기존 정답 토글 유지)
+        col_saved1, col_saved2 = st.columns([2, 1])
+        
+        with col_saved1:
+            show_saved_sol = st.toggle("🔍 저장된 문제 정답 보기", key="saved_sol_toggle")
+            sol_param = sol_saved if show_saved_sol else None
+            st.markdown(render_sudoku_board_html(pz_saved, solution=sol_param), unsafe_allow_html=True)
+            
+        # [신규 추가] PDF 다운로드 버튼 배치
+        with col_saved2:
+            st.write("") # 간격 맞춤용
+            st.write("") # 간격 맞춤용
+            with st.spinner("PDF를 준비하는 중..."):
+                # 현재 선택된 문제 데이터를 기반으로 PDF 바이너리 데이터 생성
+                pdf_bytes = create_daily_sudoku_pdf(pz_saved, p_data['difficulty'])
+                
+                # 파일명 설정: daily_sudoku_초급_20240315.pdf 형식
+                date_str = datetime.datetime.now().strftime("%Y%m%d")
+                file_name = f"daily_sudoku_{p_data['difficulty']}_{date_str}.pdf"
+                
+                # Streamlit 다운로드 버튼 UI 배치
+                st.download_button(
+                    label="📄 인쇄용 PDF 다운로드",
+                    data=pdf_bytes,
+                    file_name=file_name,
+                    mime="application/pdf",
+                    key=f"pdf_down_{p_data['id']}_{show_saved_sol}" # 고유 키 설정
+                )
     else:
         st.info("선택한 난이도에 저장된 스도쿠 문제가 없습니다. 위에서 새 문제를 만들어 보세요!")
