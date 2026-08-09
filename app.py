@@ -288,30 +288,105 @@ def board_png(board, title="Daily Sudoku Puzzle"):
                 draw.text((x0+c*cell+(cell-(box[2]-box[0]))/2, y0+r*cell+(cell-(box[3]-box[1]))/2-4), str(board[r][c]), fill="#111", font=num_font)
     out = io.BytesIO(); img.save(out, format="PNG", optimize=True); return out.getvalue()
 
-def puzzle_pdf(board, date_value):
-    out = io.BytesIO(); pdf = canvas.Canvas(out, pagesize=A4)
-    pw, ph = A4; size = 160*mm; cell = size/9; left = (pw-size)/2; bottom = 57*mm
-    pdf.setFillColor(HexColor("#111827")); pdf.setFont("Helvetica-Bold",26); pdf.drawCentredString(pw/2,ph-30*mm,"Daily Sudoku Puzzle")
-    pdf.setFillColor(HexColor("#4B5563")); pdf.setFont("Helvetica",12); pdf.drawCentredString(pw/2,ph-39*mm,date_value.strftime("%Y.%m.%d"))
-    pdf.setStrokeColor(HexColor("#111111"))
-    for i in range(10):
-        pdf.setLineWidth(2.1 if i%3==0 else .45); p=i*cell
-        pdf.line(left+p,bottom,left+p,bottom+size); pdf.line(left,bottom+p,left+size,bottom+p)
-    pdf.setFillColor(HexColor("#111111")); pdf.setFont("Helvetica-Bold",19)
-    for r in range(9):
-        for c in range(9):
-            if board[r][c]:
-                text=str(board[r][c]); x=left+c*cell+(cell-stringWidth(text,"Helvetica-Bold",19))/2
-                pdf.drawString(x,bottom+(8-r)*cell+cell*.31,text)
-    pdf.setFillColor(HexColor("#6B7280")); pdf.setFont("Helvetica",9); pdf.drawCentredString(pw/2,24*mm,"Solve one square at a time. Enjoy your puzzle!")
-    pdf.save(); return out.getvalue()
+def puzzle_pdf(board, date_value, difficulty):
+    out = io.BytesIO()
+    pdf = canvas.Canvas(out, pagesize=A4)
 
+    page_width, page_height = A4
+    board_size = 160 * mm
+    cell_size = board_size / 9
+    left = (page_width - board_size) / 2
+    bottom = 57 * mm
+
+    # 제목
+    pdf.setFillColor(HexColor("#111827"))
+    pdf.setFont("Helvetica-Bold", 26)
+    pdf.drawCentredString(
+        page_width / 2,
+        page_height - 30 * mm,
+        "Daily Sudoku Puzzle",
+    )
+
+    # 날짜
+    pdf.setFillColor(HexColor("#4B5563"))
+    pdf.setFont("Helvetica", 12)
+    pdf.drawCentredString(
+        page_width / 2,
+        page_height - 39 * mm,
+        date_value.strftime("%Y.%m.%d"),
+    )
+
+    # 난이도
+    pdf.setFont("Helvetica-Bold", 11)
+    pdf.setFillColor(HexColor("#2563EB"))
+    pdf.drawCentredString(
+        page_width / 2,
+        page_height - 46 * mm,
+        f"Difficulty: {difficulty}",
+    )
+
+    # 스도쿠 격자
+    pdf.setStrokeColor(HexColor("#111111"))
+
+    for index in range(10):
+        pdf.setLineWidth(2.1 if index % 3 == 0 else 0.45)
+        position = index * cell_size
+
+        pdf.line(
+            left + position,
+            bottom,
+            left + position,
+            bottom + board_size,
+        )
+
+        pdf.line(
+            left,
+            bottom + position,
+            left + board_size,
+            bottom + position,
+        )
+
+    # 주어진 숫자
+    pdf.setFillColor(HexColor("#111111"))
+    pdf.setFont("Helvetica-Bold", 19)
+
+    for row in range(9):
+        for col in range(9):
+            value = board[row][col]
+
+            if value == 0:
+                continue
+
+            text = str(value)
+
+            x = (
+                left
+                + col * cell_size
+                + (cell_size - stringWidth(text, "Helvetica-Bold", 19)) / 2
+            )
+
+            y = bottom + (8 - row) * cell_size + cell_size * 0.31
+
+            pdf.drawString(x, y, text)
+
+    # 하단 문구
+    pdf.setFillColor(HexColor("#6B7280"))
+    pdf.setFont("Helvetica", 9)
+    pdf.drawCentredString(
+        page_width / 2,
+        24 * mm,
+        "Solve one square at a time. Enjoy your puzzle!",
+    )
+
+    pdf.save()
+    return out.getvalue()
+    
 def downloads(board, level, prefix):
     st.caption("다운로드 버튼을 누르면 현재 기기(휴대폰 또는 PC)에 파일이 저장됩니다.")
     date_value = st.date_input("인쇄 날짜", value=dt.date.today(), key=prefix+"_date")
     stamp = date_value.strftime("%Y%m%d")
     a,b = st.columns(2)
-    a.download_button("🖨️ A4 PDF 저장", puzzle_pdf(board,date_value), f"daily_sudoku_{stamp}.pdf", "application/pdf", key=prefix+"_pdf", use_container_width=True)
+    a.download_button("🖨️ A4 PDF 저장", puzzle_pdf(board, date_value, level), f"daily_sudoku_{stamp}_{level}.pdf", "application/pdf", key=prefix + "_pdf", use_container_width=True,)
     b.download_button("🖼️ PNG 저장", board_png(board, f"Daily Sudoku Puzzle · {level}"), f"daily_sudoku_{stamp}.png", "image/png", key=prefix+"_png", use_container_width=True)
 
 # =============================================================================
