@@ -317,33 +317,20 @@ def puzzle_pdf(board, date_value, difficulty):
     )
 
     # 난이도: 초급 1칸 / 중급 2칸 / 고급 3칸
-difficulty_count = {
-    "초급": 1,
-    "중급": 2,
-    "고급": 3,
-}.get(difficulty, 1)
+    difficulty_count = {"초급": 1, "중급": 2, "고급": 3,}.get(difficulty, 1)
+    square_size = 5 * mm
+    square_gap = 2 * mm
+    total_width = (difficulty_count * square_size + (difficulty_count - 1) * square_gap)
 
-square_size = 5 * mm
-square_gap = 2 * mm
-total_width = (
-    difficulty_count * square_size
-    + (difficulty_count - 1) * square_gap
-)
+    start_x = (page_width - total_width) / 2
+    square_y = page_height - 49 * mm
 
-start_x = (page_width - total_width) / 2
-square_y = page_height - 49 * mm
+    pdf.setFillColor(HexColor("#2563EB"))
 
-pdf.setFillColor(HexColor("#2563EB"))
-
-for index in range(difficulty_count):
+    for index in range(difficulty_count):
     square_x = start_x + index * (square_size + square_gap)
 
-    pdf.roundRect(
-        square_x,
-        square_y,
-        square_size,
-        square_size,
-        1.2 * mm,
+    pdf.roundRect( square_x,square_y,square_size,square_size,1.2 * mm,
         stroke=0,
         fill=1,
     )
