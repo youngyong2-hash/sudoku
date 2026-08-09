@@ -10,4 +10,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Ping Streamlit app
-        run: 'curl -s -o /dev/null -w "Response code: %{http_code}\n" https://sudoku-6lzzbwyx5nrbmml5awpuqg.streamlit.app'
+        run: |
+          curl -s -o /dev/null -w "Response code: %{http_code}\n" https://sudoku-6lzzbwyx5nrbmml5awpuqg.streamlit.app/
