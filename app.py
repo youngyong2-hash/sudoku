@@ -829,17 +829,23 @@ with tab_manual:
                 st.session_state[f"manual_row_{row}"] = ""
             st.session_state["manual_reset_pending"] = False
 
-        st.write("한 줄에 9자리씩, 빈칸은 0으로 입력하세요. 예: `310040275`")
+                st.write("한 줄에 9자리씩, 빈칸은 0으로 입력하세요. 예: `310040275`")
 
         row_texts = []
         for row in range(9):
+            label_col, input_col = st.columns([1, 5])
+            label_col.markdown(
+                f"<div style='padding-top:0.55rem; font-weight:600;'>{row + 1}행</div>",
+                unsafe_allow_html=True
+            )
             row_texts.append(
-                st.text_input(
-                    f"{row + 1}행",
+                input_col.text_input(
+                    label=" ",
                     value="",
                     max_chars=9,
                     key=f"manual_row_{row}",
-                    placeholder="예: 310040275"
+                    placeholder="예: 310040275",
+                    label_visibility="collapsed"
                 )
             )
 
