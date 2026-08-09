@@ -731,9 +731,17 @@ with tab_read:
                 row_inputs = []
                 for r in range(9):
                     row_str = "".join(str(n) for n in grid[r])
-                    fixed = st.text_input(f"{r+1}행", value=row_str, max_chars=9, key=f"rowfix_{r}")
+                    label_col, input_col = st.columns([1, 5], vertical_alignment="center")
+                    label_col.markdown(f"**{r+1}행**")
+                    fixed = input_col.text_input(
+                        f"row_{r}",
+                        value=row_str,
+                        max_chars=9,
+                        key=f"rowfix_{r}",
+                        label_visibility="collapsed",
+                    )
                     row_inputs.append(fixed)
-
+            
                 if st.button("수정 내용 적용", type="primary", key="apply_row_fix"):
                     try:
                         new_grid = []
