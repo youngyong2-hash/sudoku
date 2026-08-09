@@ -651,15 +651,15 @@ with tab_create:
     difficulty=first.selectbox("난이도",["초급","중급","고급"])
     second.write(""); second.write("")
     if second.button("문제 생성", type="primary", use_container_width=True):
-    with st.spinner("유일한 정답을 가진 문제를 만들고 있습니다..."):
-        puzzle, answer = generate_puzzle(difficulty)
+        with st.spinner("유일한 정답을 가진 문제를 만들고 있습니다..."):
+            puzzle, answer = generate_puzzle(difficulty)
 
-    st.session_state.update({"puzzle": puzzle, "answer": answer, "difficulty": difficulty})
+        st.session_state.update({"puzzle": puzzle, "answer": answer, "difficulty": difficulty})
 
-    try:
-        save_puzzle(difficulty, puzzle, answer)
-        st.success("문제를 만들고 보관함에 저장했습니다.")
-    except Exception as error:
+        try:
+            save_puzzle(difficulty, puzzle, answer)
+            st.success("문제를 만들고 보관함에 저장했습니다.")
+        except Exception as error:
         st.warning(f"문제는 생성됐지만 보관함 저장에는 실패했습니다: {error}")
     if "puzzle" in st.session_state:
         st.markdown(f"### 📋 생성된 문제 · {st.session_state['difficulty']}")
