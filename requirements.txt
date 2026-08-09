@@ -1,6 +1,6 @@
 streamlit
 Pillow
-streamlit-cropper
+streamlit-cropperjs
 google-genai
 pydantic
 reportlab
