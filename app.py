@@ -22,7 +22,7 @@ from reportlab.pdfgen import canvas
 # ------------------------------------------------------------------------------
 # 1. App configuration
 # ------------------------------------------------------------------------------
-st.set_page_config(page_title="스도쿠 AI 도우미", page_icon="🧩", layout="centered")
+st.set_page_config(page_title="Miracle Morning Sudoku by youngyong", page_icon="🧩", layout="centered")
 
 st.markdown(
     """
