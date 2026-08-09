@@ -515,11 +515,7 @@ def make_pdf(board, date_value, difficulty):
     # 날짜
     pdf.setFillColor(HexColor("#4B5563"))
     pdf.setFont("Helvetica", 12)
-    pdf.drawCentredString(
-        width / 2,
-        height - 39 * mm,
-        date_value.strftime("%Y.%m.%d")
-    )
+    pdf.drawCentredString(width / 2,height - 39 * mm,date_value.strftime("%Y.%m.%d"))
 
     # 난이도 표시 점
     count = {"초급": 1, "중급": 2, "고급": 3}.get(difficulty, 1)
@@ -530,15 +526,7 @@ def make_pdf(board, date_value, difficulty):
 
     pdf.setFillColor(HexColor("#2563EB"))
     for index in range(count):
-        pdf.roundRect(
-            start + index * (square + gap),
-            y,
-            square,
-            square,
-            1.2 * mm,
-            stroke=0,
-            fill=1
-        )
+        pdf.roundRect(start + index * (square + gap),y,square,square,1.2 * mm,stroke=0,fill=1)
 
     # 스도쿠 격자
     pdf.setStrokeColor(HexColor("#111111"))
@@ -547,20 +535,10 @@ def make_pdf(board, date_value, difficulty):
         position = index * cell
 
         # 세로선
-        pdf.line(
-            left + position,
-            bottom,
-            left + position,
-            bottom + size
-        )
+        pdf.line(left + position,bottom,left + position,bottom + size)
 
         # 가로선
-        pdf.line(
-            left,
-            bottom + position,
-            left + size,
-            bottom + position
-        )
+        pdf.line(left,bottom + position,left + size,bottom + position)
 
     # 문제 숫자
     pdf.setFillColor(HexColor("#111111"))
@@ -570,24 +548,14 @@ def make_pdf(board, date_value, difficulty):
         for col in range(9):
             if board[row][col]:
                 text = str(board[row][col])
-
-                x = (
-                    left
-                    + col * cell
-                    + (cell - stringWidth(text, "Helvetica-Bold", 11)) / 2
-                )
-
+                x = (left+ col * cell+ (cell - stringWidth(text, "Helvetica-Bold", 15)) / 2)
                 y = bottom + (8 - row) * cell + cell * 0.30
                 pdf.drawString(x, y, text)
 
     # 하단 문구
     pdf.setFillColor(HexColor("#6B7280"))
     pdf.setFont("Helvetica", 9)
-    pdf.drawCentredString(
-        width / 2,
-        24 * mm,
-        "Solve one square at a time. Enjoy your puzzle!"
-    )
+    pdf.drawCentredString(width / 2,24 * mm,"Solve one square at a time. Enjoy your puzzle!")
 
     pdf.save()
     return data.getvalue()
