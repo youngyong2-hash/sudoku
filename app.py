@@ -79,12 +79,12 @@ def validate_grid(grid):
 
 def ai_read_sudoku(client, image, model_name):
     instruction = """
-당신은 스도쿠 사진 판독 전문 AI입니다. 사진 속 9x9 스도쿠를 읽으세요.
-인쇄 숫자와 손글씨 숫자를 모두 읽어 grid에 기록하세요.
-- grid는 9개의 행과 각 행의 9개 숫자로 구성됩니다.
-- 빈칸 또는 확신할 수 없는 숫자는 0으로 기록하고 추측하지 마세요.
-- errors와 single_hint도 스키마에 맞게 반환하세요.
-- 격자 밖의 텍스트와 메모는 무시하세요.
+당신은 스도쿠 사진 판독 전문 AI입니다. 사진 속 9x9 스도쿠를 읽어라.
+인쇄 숫자와 손글씨 숫자를 모두 읽어 grid에 기록하라.
+- grid는 9개의 행과 각 행의 9개 숫자로 구성된다.
+- 빈칸 또는 확신할 수 없는 숫자는 0으로 기록하고 추측하지 마시오.
+- errors와 single_hint도 스키마에 맞게 반환하라.
+- 격자 밖의 텍스트, 손글씨 중 비교적 작은 것, 메모는 무시하라.
 """
     response = client.models.generate_content(
         model=model_name,
@@ -187,6 +187,97 @@ def count_solutions(board, limit=2):
             return total
     return total
 
+def make_random_solution():
+    """유효한 완성 스도쿠 판을 빠르게 만들고 무작위 변환한다."""
+    base = [
+        [(row * 3 + row // 3 + col) % 9 + 1 for col in range(9)]
+        for row in range(9)
+    ]
+
+    # 숫자 자체를 무작위 치환
+    digits = list(range(1, 10))
+    random.shuffle(digits)
+    board = [[digits[value - 1] for value in row] for row in base]
+
+    # 3개 밴드(가로 큰 묶음) 순서 변경
+    bands = [0, 1, 2]
+    random.shuffle(bands)
+
+    rows = []
+    for band in bands:
+        inner_rows = [0, 1, 2]
+        random.shuffle(inner_rows)
+        rows.extend([band * 3 + item for item in inner_rows])
+
+    board = [board[row][:] for row in rows]
+
+    # 3개 스택(세로 큰 묶음) 순서 변경
+    stacks = [0, 1, 2]
+    random.shuffle(stacks)
+
+    cols = []
+    for stack in stacks:
+        inner_cols = [0, 1, 2]
+        random.shuffle(inner_cols)
+        cols.extend([stack * 3 + item for item in inner_cols])
+
+    board = [[row[col] for col in cols] for row in board]
+
+    # 절반 확률로 전치: 행과 열 교환
+    if random.choice([True, False]):
+        board = [[board[col][row] for col in range(9)] for row in range(9)]
+
+    return board
+
+
+def clue_count(board):
+    """현재 문제에 남아 있는 숫자 개수를 반환한다."""
+    return sum(value != 0 for row in board for value in row)
+
+
+def make_rotational_groups():
+    """
+    180도 회전 대칭 위치를 묶는다.
+    예: (0, 0)과 (8, 8)을 한 쌍으로 제거한다.
+    중앙 (4, 4)은 단독 그룹이다.
+    """
+    groups = []
+    visited = set()
+
+    for row in range(9):
+        for col in range(9):
+            if (row, col) in visited:
+                continue
+
+            opposite = (8 - row, 8 - col)
+            group = [(row, col)]
+
+            if opposite != (row, col):
+                group.append(opposite)
+
+            visited.update(group)
+            groups.append(group)
+
+    return groups
+
+
+def try_remove_group(puzzle, group):
+    """한 그룹을 비운 뒤, 유일한 해가 유지될 때만 제거를 확정한다."""
+    backup = [(row, col, puzzle[row][col]) for row, col in group]
+
+    for row, col, _ in backup:
+        puzzle[row][col] = 0
+
+    # count_solutions는 보드를 변경하므로 복사본 전달
+    if count_solutions([row[:] for row in puzzle], limit=2) == 1:
+        return True
+
+    # 유일해가 깨지면 원상 복구
+    for row, col, value in backup:
+        puzzle[row][col] = value
+
+    return False
+    
 def generate_puzzle(difficulty):
     needed = {"초급":38, "중급":30, "고급":24}[difficulty]
     answer = [[0] * 9 for _ in range(9)]
