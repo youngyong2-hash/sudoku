@@ -1,10 +1,6 @@
 streamlit
-google-genai
-pillow
+Pillow
 streamlit-cropper
-fpdf2
+google-genai
+pydantic
 reportlab
-streamlit-cropperjs
-google-api-python-client
-google-auth
-google-auth-httplib2
