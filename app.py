@@ -459,10 +459,9 @@ if crop:
         key="mobile_sudoku_cropper",
     )
 
-else:
-    target = work
+else: target = work
         
-        if target:
+            if target:
             current_hash=digest_image(target)
             if st.session_state.get("crop_hash") != current_hash:
                 st.session_state["crop_hash"]=current_hash
