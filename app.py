@@ -6,6 +6,8 @@ import hashlib
 import datetime as dt
 from pathlib import Path
 from zoneinfo import ZoneInfo
+import gspread
+from google.oauth2.service_account import Credentials
 
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont, ImageOps
@@ -18,6 +20,26 @@ from reportlab.lib.units import mm
 from reportlab.lib.colors import HexColor
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase.pdfmetrics import stringWidth
+
+SHEET_SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
+
+@st.cache_resource
+def get_sheet_client():
+    credentials = Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"],
+        scopes=SHEET_SCOPES,
+    )
+    return gspread.authorize(credentials)
+
+@st.cache_resource
+def get_worksheet():
+    client = get_sheet_client()
+    spreadsheet = client.open_by_url(st.secrets["sheets"]["spreadsheet_url"])
+    return spreadsheet.worksheet(st.secrets["sheets"]["worksheet_name"])
+
 
 # =============================================================================
 # 설정
@@ -367,10 +389,54 @@ def find_hint_cells(board):
 # =============================================================================
 def load_puzzles(difficulty=None):
     try:
-        items = json.loads(DB_FILE.read_text(encoding="utf-8")) if DB_FILE.exists() else []
-        return [item for item in items if item.get("difficulty") == difficulty] if difficulty else items
-    except (OSError, json.JSONDecodeError):
+        worksheet = get_worksheet()
+        rows = worksheet.get_all_records()
+    except Exception as error:
+        st.warning(f"보관함을 불러오지 못했습니다: {error}")
         return []
+
+    items = []
+    for row in rows:
+        try:
+            items.append({
+                "id": int(row["id"]),
+                "difficulty": row["difficulty"],
+                "puzzle": json.loads(row["puzzle"]),
+                "solution": json.loads(row["solution"]),
+                "created_at": row["created_at"],
+            })
+        except (KeyError, ValueError, json.JSONDecodeError):
+            continue
+
+    if difficulty:
+        items = [item for item in items if item["difficulty"] == difficulty]
+
+    return items
+
+
+#def save_puzzle(difficulty, puzzle, answer):
+#    worksheet = get_worksheet()
+#    existing = load_puzzles()
+#    new_id = max([item["id"] for item in existing], default=0) + 1
+
+#    created_at = dt.datetime.now(
+#        ZoneInfo("Asia/Seoul")
+#    ).strftime("%Y-%m-%d %H:%M:%S KST")
+
+#    worksheet.append_row([
+#        new_id,
+#        difficulty,
+#        json.dumps(puzzle),
+#        json.dumps(answer),
+#        created_at,
+#    ])
+
+#def load_puzzles(difficulty=None):
+#    try:
+#        items = json.loads(DB_FILE.read_text(encoding="utf-8")) if DB_FILE.exists() else []
+#        return [item for item in items if item.get("difficulty") == difficulty] if difficulty else items
+#    except (OSError, json.JSONDecodeError):
+#        return []
 
 def save_puzzle(difficulty, puzzle, answer):
     items = load_puzzles()
