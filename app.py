@@ -21,7 +21,7 @@ from reportlab.pdfbase.pdfmetrics import stringWidth
 # =============================================================================
 # 설정
 # =============================================================================
-st.set_page_config(page_title="🏄영용's Sudoku", page_icon="🏄", layout="centered")
+st.set_page_config(page_title="영용's Sudoku", page_icon="🏄", layout="centered")
 st.markdown("""
 <style>
 .stApp {max-width:100%; padding-left:.5rem; padding-right:.5rem;}
@@ -307,26 +307,107 @@ def make_png(board, title="Daily Sudoku Puzzle"):
     return data.getvalue()
 
 def make_pdf(board, date_value, difficulty):
-    data = io.BytesIO(); pdf = canvas.Canvas(data,pagesize=A4)
-    width,height = A4; size = 160*mm; cell = size/9; left = (width-size)/2; bottom = 57*mm
-    pdf.setFillColor(HexColor("#111827")); pdf.setFont("Helvetica-Bold",26); pdf.drawCentredString(width/2,height-30*mm,"Daily Sudoku Puzzle")
-    pdf.setFillColor(HexColor("#4B5563")); pdf.setFont("Helvetica",12); pdf.drawCentredString(width/2,height-39*mm,date_value.strftime("%Y.%m.%d"))
-    count = {"초급":1,"중급":2,"고급":3}.get(difficulty,1); square=5*mm; gap=2*mm
-    start=(width-(count*square+(count-1)*gap))/2; y=height-49*mm; pdf.setFillColor(HexColor("#2563EB"))
+    data = io.BytesIO()
+    pdf = canvas.Canvas(data, pagesize=A4)
+
+    width, height = A4
+
+    # 기존 160mm → 절반인 80mm로 축소
+    size = 80 * mm
+    cell = size / 9
+
+    # A4 용지 정중앙 배치
+    left = (width - size) / 2
+    bottom = (height - size) / 2
+
+    # 제목
+    pdf.setFillColor(HexColor("#111827"))
+    pdf.setFont("Helvetica-Bold", 26)
+    pdf.drawCentredString(
+        width / 2,
+        height - 30 * mm,
+        "Daily Sudoku Puzzle"
+    )
+
+    # 날짜
+    pdf.setFillColor(HexColor("#4B5563"))
+    pdf.setFont("Helvetica", 12)
+    pdf.drawCentredString(
+        width / 2,
+        height - 39 * mm,
+        date_value.strftime("%Y.%m.%d")
+    )
+
+    # 난이도 표시 점
+    count = {"초급": 1, "중급": 2, "고급": 3}.get(difficulty, 1)
+    square = 5 * mm
+    gap = 2 * mm
+    start = (width - (count * square + (count - 1) * gap)) / 2
+    y = height - 49 * mm
+
+    pdf.setFillColor(HexColor("#2563EB"))
     for index in range(count):
-        pdf.roundRect(start+index*(square+gap),y,square,square,1.2*mm,stroke=0,fill=1)
+        pdf.roundRect(
+            start + index * (square + gap),
+            y,
+            square,
+            square,
+            1.2 * mm,
+            stroke=0,
+            fill=1
+        )
+
+    # 스도쿠 격자
     pdf.setStrokeColor(HexColor("#111111"))
     for index in range(10):
-        pdf.setLineWidth(2.1 if index%3==0 else .45); p=index*cell
-        pdf.line(left+p,bottom,left+p,bottom+size); pdf.line(left,bottom+p,left+size,bottom+p)
-    pdf.setFillColor(HexColor("#111111")); pdf.setFont("Helvetica-Bold",19)
+        pdf.setLineWidth(1.5 if index % 3 == 0 else 0.35)
+        position = index * cell
+
+        # 세로선
+        pdf.line(
+            left + position,
+            bottom,
+            left + position,
+            bottom + size
+        )
+
+        # 가로선
+        pdf.line(
+            left,
+            bottom + position,
+            left + size,
+            bottom + position
+        )
+
+    # 문제 숫자
+    pdf.setFillColor(HexColor("#111111"))
+    pdf.setFont("Helvetica-Bold", 11)
+
     for row in range(9):
         for col in range(9):
             if board[row][col]:
-                text=str(board[row][col]); x=left+col*cell+(cell-stringWidth(text,"Helvetica-Bold",19))/2
-                pdf.drawString(x,bottom+(8-row)*cell+cell*.31,text)
-    pdf.setFillColor(HexColor("#6B7280")); pdf.setFont("Helvetica",9); pdf.drawCentredString(width/2,24*mm,"Solve one square at a time. Enjoy your puzzle!")
-    pdf.save(); return data.getvalue()
+                text = str(board[row][col])
+
+                x = (
+                    left
+                    + col * cell
+                    + (cell - stringWidth(text, "Helvetica-Bold", 11)) / 2
+                )
+
+                y = bottom + (8 - row) * cell + cell * 0.30
+                pdf.drawString(x, y, text)
+
+    # 하단 문구
+    pdf.setFillColor(HexColor("#6B7280"))
+    pdf.setFont("Helvetica", 9)
+    pdf.drawCentredString(
+        width / 2,
+        24 * mm,
+        "Solve one square at a time. Enjoy your puzzle!"
+    )
+
+    pdf.save()
+    return data.getvalue()
 
 def download_buttons(board,difficulty,prefix):
     st.caption("PDF와 PNG는 Google Drive가 아니라 현재 사용 중인 기기에 저장됩니다.")
