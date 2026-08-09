@@ -430,7 +430,19 @@ def parse_manual_board(cells):
     """9x9 입력 위젯 값들을 보드 리스트로 변환한다."""
     return [[cells[row][col] for col in range(9)] for row in range(9)]
 
-
+def parse_row_strings(row_texts):
+    """
+    9줄짜리 문자열 리스트(각 줄 9자리 숫자)를 9x9 보드로 변환한다.
+    실패 시 (None, 오류_메시지)를 반환한다.
+    """
+    board = []
+    for index, text in enumerate(row_texts):
+        cleaned = text.strip().replace(" ", "")
+        if len(cleaned) != 9 or not cleaned.isdigit():
+            return None, f"{index + 1}행: 9자리 숫자(0~9)로 입력해야 합니다. 지금 입력: '{text}'"
+        board.append([int(ch) for ch in cleaned])
+    return board, None
+    
 def parse_row_strings(row_texts):
     """
     9줄짜리 문자열 리스트(각 줄 9자리 숫자)를 9x9 보드로 변환한다.
@@ -811,7 +823,7 @@ with tab_manual:
     # -------------------------------------------------------------------
     # 방식 1: 숫자 직접 입력 (한 줄에 9자리씩, 9줄)
     # -------------------------------------------------------------------
-    if input_method == "✍️ 숫자 직접 입력":
+        if input_method == "✍️ 숫자 직접 입력":
         st.write("한 줄에 9자리씩, 빈칸은 0으로 입력하세요. 예: `310040275`")
 
         row_texts = []
@@ -958,7 +970,7 @@ with tab_manual:
                             st.session_state.pop("manual_ai_grid", None)
                         except Exception as error:
                             st.warning(f"저장에 실패했습니다: {error}")
-
+                            
 # =============================================================================
 # 탭 4: 문제 풀이 (보관함 → 인쇄 → 채점 → 정답 표시)
 # =============================================================================
