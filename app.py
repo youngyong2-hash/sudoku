@@ -659,13 +659,233 @@ def archive_label(item):
     solved_mark = "✅ " if item.get("solved") else "⬜ "
     return f"{solved_mark}#{item.get('id','?')} [{item.get('difficulty','')}] ({item.get('source','생성')}) {item.get('created_at','')}"
 
+# =============================================================================
+# 클릭형 스도쿠 풀이 보드
+# =============================================================================
+def start_sudoku_solver(puzzle, answer):
+    """새 문제를 클릭형 풀이 보드에 불러온다."""
+    st.session_state["solver_original"] = [row[:] for row in puzzle]
+    st.session_state["solver_board"] = [row[:] for row in puzzle]
+    st.session_state["solver_answer"] = [row[:] for row in answer]
+    st.session_state["solver_selected"] = None
+    st.session_state["solver_wrong_cells"] = set()
+    st.session_state["solver_rule_error_cells"] = set()
+    st.session_state["solver_message"] = ""
+
+
+def reset_sudoku_solver():
+    """현재 풀이 보드를 원래 문제 상태로 되돌린다."""
+    if "solver_original" not in st.session_state:
+        return
+
+    st.session_state["solver_board"] = [
+        row[:] for row in st.session_state["solver_original"]
+    ]
+    st.session_state["solver_selected"] = None
+    st.session_state["solver_wrong_cells"] = set()
+    st.session_state["solver_rule_error_cells"] = set()
+    st.session_state["solver_message"] = "처음 상태로 되돌렸습니다."
+
+
+def set_solver_number(number):
+    """선택한 빈칸에 숫자를 넣거나 지운다."""
+    selected = st.session_state.get("solver_selected")
+
+    if selected is None:
+        st.session_state["solver_message"] = "먼저 보드의 빈칸 하나를 선택하세요."
+        return
+
+    row, col = selected
+    original = st.session_state["solver_original"]
+
+    # 처음부터 주어진 숫자는 수정 불가
+    if original[row][col] != 0:
+        st.session_state["solver_message"] = "처음 주어진 숫자는 바꿀 수 없습니다."
+        return
+
+    st.session_state["solver_board"][row][col] = number
+    st.session_state["solver_wrong_cells"] = set()
+    st.session_state["solver_rule_error_cells"] = set()
+
+    if number == 0:
+        st.session_state["solver_message"] = f"{row + 1}행 {col + 1}열을 비웠습니다."
+    else:
+        st.session_state["solver_message"] = (
+            f"{row + 1}행 {col + 1}열에 {number}을(를) 입력했습니다."
+        )
+
+
+def check_solver_rules():
+    """현재 입력한 숫자의 스도쿠 규칙 위반을 표시한다."""
+    board = st.session_state["solver_board"]
+    errors = find_rule_errors(board)
+
+    st.session_state["solver_rule_error_cells"] = errors
+    st.session_state["solver_wrong_cells"] = set()
+
+    if errors:
+        st.session_state["solver_message"] = (
+            f"규칙에 맞지 않는 숫자가 {len(errors)}칸 있습니다. "
+            "✕ 표시된 칸을 확인하세요."
+        )
+    else:
+        st.session_state["solver_message"] = "현재 입력된 숫자에는 규칙 위반이 없습니다."
+
+
+def check_solver_answer():
+    """현재 입력한 숫자를 저장된 정답과 비교한다."""
+    board = st.session_state["solver_board"]
+    original = st.session_state["solver_original"]
+    answer = st.session_state["solver_answer"]
+
+    wrong_cells = set()
+    entered_count = 0
+
+    for row in range(9):
+        for col in range(9):
+            # 처음부터 주어진 숫자는 정답 비교 대상에서 제외
+            if original[row][col] != 0:
+                continue
+
+            if board[row][col] != 0:
+                entered_count += 1
+
+                if board[row][col] != answer[row][col]:
+                    wrong_cells.add((row, col))
+
+    st.session_state["solver_wrong_cells"] = wrong_cells
+    st.session_state["solver_rule_error_cells"] = set()
+
+    if entered_count == 0:
+        st.session_state["solver_message"] = "아직 입력한 숫자가 없습니다."
+    elif wrong_cells:
+        st.session_state["solver_message"] = (
+            f"정답과 다른 숫자가 {len(wrong_cells)}칸 있습니다. "
+            "✕ 표시된 칸을 확인하세요."
+        )
+    elif all(
+        board[row][col] == answer[row][col]
+        for row in range(9)
+        for col in range(9)
+    ):
+        st.session_state["solver_message"] = "🎉 정답입니다! 스도쿠를 완성했어요."
+        st.balloons()
+    else:
+        st.session_state["solver_message"] = (
+            "현재 입력한 숫자는 모두 맞습니다. 계속 풀어 보세요!"
+        )
+
+
+def render_clickable_sudoku_board():
+    """빈칸을 클릭해서 선택하는 9x9 보드."""
+    board = st.session_state["solver_board"]
+    original = st.session_state["solver_original"]
+    selected = st.session_state.get("solver_selected")
+    wrong_cells = st.session_state.get("solver_wrong_cells", set())
+    rule_error_cells = st.session_state.get("solver_rule_error_cells", set())
+
+    st.caption("빈칸을 누른 뒤 아래 숫자 패드에서 숫자를 선택하세요.")
+
+    for row in range(9):
+        columns = st.columns(9, gap="small")
+
+        for col in range(9):
+            value = board[row][col]
+            is_given = original[row][col] != 0
+            is_selected = selected == (row, col)
+            is_error = (
+                (row, col) in wrong_cells
+                or (row, col) in rule_error_cells
+            )
+
+            # 빈칸도 버튼 크기를 유지하도록 점으로 표시
+            label = str(value) if value != 0 else "·"
+
+            if is_error:
+                label = f"✕{label}"
+            elif is_selected:
+                label = f"[{label}]"
+
+            with columns[col]:
+                if st.button(
+                    label,
+                    key=f"solver_cell_{row}_{col}",
+                    disabled=is_given,
+                    type="primary" if is_selected else "secondary",
+                    use_container_width=True,
+                ):
+                    st.session_state["solver_selected"] = (row, col)
+                    st.session_state["solver_message"] = (
+                        f"{row + 1}행 {col + 1}열을 선택했습니다."
+                    )
+                    st.rerun()
+
+        # 3x3 구역을 구분하는 여백
+        if row in (2, 5):
+            st.markdown(
+                "<div style='height: 8px;'></div>",
+                unsafe_allow_html=True,
+            )
+
+
+def render_solver_number_pad():
+    """숫자 입력 패드."""
+    selected = st.session_state.get("solver_selected")
+
+    if selected is None:
+        st.info("보드에서 빈칸 하나를 먼저 선택하세요.")
+    else:
+        row, col = selected
+        value = st.session_state["solver_board"][row][col]
+
+        st.info(
+            f"선택 칸: **{row + 1}행 {col + 1}열**"
+            f" · 현재 숫자: **{value if value else '빈칸'}**"
+        )
+
+    for number_row in ([1, 2, 3], [4, 5, 6], [7, 8, 9]):
+        columns = st.columns(3)
+
+        for index, number in enumerate(number_row):
+            with columns[index]:
+                if st.button(
+                    str(number),
+                    key=f"solver_pad_{number}",
+                    disabled=selected is None,
+                    use_container_width=True,
+                ):
+                    set_solver_number(number)
+                    st.rerun()
+
+    left, right = st.columns(2)
+
+    with left:
+        if st.button(
+            "⌫ 지우기",
+            key="solver_erase",
+            disabled=selected is None,
+            use_container_width=True,
+        ):
+            set_solver_number(0)
+            st.rerun()
+
+    with right:
+        if st.button(
+            "선택 해제",
+            key="solver_clear_selection",
+            use_container_width=True,
+        ):
+            st.session_state["solver_selected"] = None
+            st.session_state["solver_message"] = "선택을 해제했습니다."
+            st.rerun()
+
 
 # =============================================================================
 # 탭 구성
 # =============================================================================
 tab_read, tab_create, tab_manual, tab_solve = st.tabs([
-    "📸 사진 읽기 & 확인",
-    "🎲 문제 만들기 & 보관함",
+    "📸 정답 확인",
+    "🎲 문제 생성",
     "✍️ 문제 입력",
     "📝 문제 풀이",
 ])
@@ -1079,38 +1299,117 @@ with tab_solve:
             st.success(f"✅ 이 문제는 이미 정답을 맞혔습니다. (풀이 완료: {solve_item['solved']})")
 
         st.markdown("### 1. 먼저 인쇄해서 풀어보세요")
-        download_buttons(solve_puzzle, solve_item.get("difficulty", "초급"), f"solve_{solve_item.get('id', solve_index)}")
+        download_buttons(
+            solve_puzzle,
+            solve_item.get("difficulty", "초급"),
+            f"solve_{solve_item.get('id', solve_index)}"
+        )
 
         st.markdown("---")
-        st.markdown("### 2. 다 풀었으면 아래에 답을 입력하세요")
-        st.caption("문제에 원래 적혀 있던 숫자는 회색으로 고정되어 있고, 빈칸만 입력하면 됩니다.")
+        st.markdown("### 2. 클릭해서 화면에서 바로 풀어보세요")
+        st.caption(
+            "빈칸을 누른 뒤 아래 숫자 패드로 입력하세요. "
+            "문제에 원래 적혀 있던 숫자는 회색으로 고정되어 있습니다."
+        )
 
-        answer_cells = [[0] * 9 for _ in range(9)]
         widget_prefix = f"solve_{solve_item.get('id', solve_index)}"
+
+        # 선택한 문제가 바뀌면 풀이 상태를 새로 초기화
+        if st.session_state.get("solver_active_key") != widget_prefix:
+            st.session_state["solver_active_key"] = widget_prefix
+            st.session_state["solver_original"] = [row[:] for row in solve_puzzle]
+            st.session_state["solver_board"] = [row[:] for row in solve_puzzle]
+            st.session_state["solver_answer"] = [row[:] for row in solve_solution]
+            st.session_state["solver_selected"] = None
+            st.session_state["solver_wrong_cells"] = set()
+            st.session_state["solver_message"] = ""
+
+        board = st.session_state["solver_board"]
+        original = st.session_state["solver_original"]
+        selected = st.session_state.get("solver_selected")
+        wrong_cells = st.session_state.get("solver_wrong_cells", set())
+
         for row in range(9):
             cols = st.columns(9)
             for col in range(9):
-                fixed_value = solve_puzzle[row][col]
+                fixed_value = original[row][col]
+
                 if fixed_value != 0:
                     cols[col].markdown(
                         f"<div style='text-align:center;font-weight:700;color:#6b7280;"
                         f"border:1px solid #e5e7eb;border-radius:4px;padding:6px 0;'>{fixed_value}</div>",
                         unsafe_allow_html=True
                     )
-                    answer_cells[row][col] = fixed_value
                 else:
-                    answer_cells[row][col] = cols[col].number_input(
-                        label=" ",
-                        min_value=0,
-                        max_value=9,
-                        value=0,
-                        step=1,
-                        key=f"{widget_prefix}_{row}_{col}",
-                        label_visibility="collapsed",
-                    )
+                    value = board[row][col]
+                    is_selected = selected == (row, col)
+                    is_wrong = (row, col) in wrong_cells
+                    label = str(value) if value != 0 else "·"
+
+                    if is_wrong:
+                        label = f"✕{label}"
+                    elif is_selected:
+                        label = f"[{label}]"
+
+                    if cols[col].button(
+                        label,
+                        key=f"{widget_prefix}_cell_{row}_{col}",
+                        type="primary" if is_selected else "secondary",
+                        use_container_width=True,
+                    ):
+                        st.session_state["solver_selected"] = (row, col)
+                        st.rerun()
+
+            if row in (2, 5):
+                st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
+
+        st.markdown("#### 숫자 입력")
+
+        if selected is None:
+            st.info("보드에서 빈칸 하나를 먼저 선택하세요.")
+        else:
+            sel_row, sel_col = selected
+            st.caption(f"선택 칸: {sel_row + 1}행 {sel_col + 1}열")
+
+        for number_row in ([1, 2, 3], [4, 5, 6], [7, 8, 9]):
+            pad_cols = st.columns(3)
+            for i, number in enumerate(number_row):
+                if pad_cols[i].button(
+                    str(number),
+                    key=f"{widget_prefix}_pad_{number}",
+                    disabled=selected is None,
+                    use_container_width=True,
+                ):
+                    r, c = selected
+                    st.session_state["solver_board"][r][c] = number
+                    st.session_state["solver_wrong_cells"] = set()
+                    st.rerun()
+
+        erase_col, clear_col = st.columns(2)
+        with erase_col:
+            if st.button(
+                "⌫ 지우기",
+                key=f"{widget_prefix}_erase",
+                disabled=selected is None,
+                use_container_width=True,
+            ):
+                r, c = selected
+                st.session_state["solver_board"][r][c] = 0
+                st.session_state["solver_wrong_cells"] = set()
+                st.rerun()
+        with clear_col:
+            if st.button(
+                "선택 해제",
+                key=f"{widget_prefix}_clear",
+                use_container_width=True,
+            ):
+                st.session_state["solver_selected"] = None
+                st.rerun()
+
+        st.markdown("---")
 
         if st.button("✅ 채점하기", type="primary", key=f"{widget_prefix}_check"):
-            user_board = parse_manual_board(answer_cells)
+            user_board = st.session_state["solver_board"]
             wrong_cells = set()
             empty_cells = 0
 
@@ -1122,6 +1421,8 @@ with tab_solve:
                         empty_cells += 1
                     elif user_board[row][col] != solve_solution[row][col]:
                         wrong_cells.add((row, col))
+
+            st.session_state["solver_wrong_cells"] = wrong_cells
 
             st.markdown("### 결과")
 
