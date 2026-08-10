@@ -531,17 +531,26 @@ def save_puzzle(difficulty, puzzle, solution, source=""):
     return new_id
 
 
-def mark_puzzle_solved(puzzle_id):
+def set_puzzle_solved_status(puzzle_id, solved_text):
+    """보관함 항목의 '풀이 완료' 칸을 설정하거나(문자열) 해제(빈 문자열)한다."""
     try:
         worksheet = get_worksheet()
         cell = worksheet.find(str(puzzle_id))
         if cell is None:
             return False
-        solved_at = dt.datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M")
-        worksheet.update_cell(cell.row, SOLVED_COLUMN_INDEX, solved_at)
+        worksheet.update_cell(cell.row, SOLVED_COLUMN_INDEX, solved_text)
         return True
     except Exception:
         return False
+
+
+def mark_puzzle_solved(puzzle_id):
+    solved_at = dt.datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M")
+    return set_puzzle_solved_status(puzzle_id, solved_at)
+
+
+def unmark_puzzle_solved(puzzle_id):
+    return set_puzzle_solved_status(puzzle_id, "")
 
 
 def archive_label(item):
@@ -851,12 +860,15 @@ with tab_create:
         if st.button("문제 생성", type="primary", use_container_width=True):
             with st.spinner("문제를 만드는 중..."):
                 puzzle, answer = generate_puzzle(difficulty)
-                st.session_state.update(puzzle=puzzle, answer=answer, difficulty=difficulty)
+                new_id = None
                 try:
-                    save_puzzle(difficulty, puzzle, answer, source="생성")
+                    new_id = save_puzzle(difficulty, puzzle, answer, source="생성")
                     st.success("새 문제가 만들어져 보관함에 저장되었습니다.")
                 except Exception as error:
                     st.warning(f"보관함 저장 중 오류: {error}")
+                st.session_state.update(
+                    puzzle=puzzle, answer=answer, difficulty=difficulty, puzzle_id=new_id,
+                )
 
     if "puzzle" in st.session_state:
         st.markdown(f"### 📋 방금 만든 문제 ({st.session_state['difficulty']})")
@@ -925,9 +937,10 @@ with tab_manual:
                     st.error(error_message)
                 else:
                     try:
-                        save_puzzle(manual_difficulty, board, solution, source="직접입력")
+                        new_id = save_puzzle(manual_difficulty, board, solution, source="직접입력")
                         st.success("문제가 저장되었습니다.")
                         st.session_state["manual_saved_puzzle"] = {
+                            "id": new_id,
                             "board": board,
                             "solution": solution,
                             "difficulty": manual_difficulty,
@@ -1053,9 +1066,10 @@ with tab_manual:
                                 st.error(error_message)
                             else:
                                 try:
-                                    save_puzzle(manual_difficulty, board, solution, source="사진입력")
+                                    new_id = save_puzzle(manual_difficulty, board, solution, source="사진입력")
                                     st.success("문제가 저장되었습니다.")
                                     st.session_state["manual_photo_saved_puzzle"] = {
+                                        "id": new_id,
                                         "board": board,
                                         "solution": solution,
                                         "difficulty": manual_difficulty,
@@ -1077,11 +1091,11 @@ with tab_manual:
                     download_buttons(saved["board"], saved["difficulty"], "manual_photo")
 
 # -----------------------------------------------------------------------------
-# 탭 4. 보관함 (검색/조회 전용, 풀이 기능 없음)
+# 탭 4. 보관함 (검색/조회 + 풀이 완료 체크 토글)
 # -----------------------------------------------------------------------------
 with tab_archive:
     st.subheader("📁 저장된 문제 보관함")
-    st.caption("난이도, 풀이 완료 여부로 검색해서 저장된 문제를 확인할 수 있습니다.")
+    st.caption("난이도, 풀이 완료 여부로 검색해서 저장된 문제를 확인하고, 풀이 완료 여부를 체크할 수 있습니다.")
 
     filter_col, hide_col = st.columns([2, 1])
     with filter_col:
@@ -1110,6 +1124,7 @@ with tab_archive:
         )
 
         archive_item = archive_items[archive_index]
+        archive_id = archive_item.get("id")
         archive_puzzle = archive_item["puzzle"]
         archive_solution = archive_item.get("solution")
 
@@ -1117,10 +1132,23 @@ with tab_archive:
             archive_solution = [row[:] for row in archive_puzzle]
             solve(archive_solution)
 
+        # -------------------------------------------------------------------
+        # 풀이 완료 여부 체크박스
+        # -------------------------------------------------------------------
+        solved_key = f"archive_solved_{archive_id}"
+        currently_solved = bool(archive_item.get("solved"))
+
+        checked = st.checkbox("✅ 푼 문제로 표시", value=currently_solved, key=solved_key)
+
+        if checked != currently_solved:
+            success = mark_puzzle_solved(archive_id) if checked else unmark_puzzle_solved(archive_id)
+            if success:
+                st.rerun()
+            else:
+                st.warning("상태 변경 중 오류가 발생했습니다.")
+
         if archive_item.get("solved"):
-            st.success(f"✅ 이미 풀이 완료된 문제입니다. (완료일: {archive_item['solved']})")
-        else:
-            st.info("아직 풀이 완료로 기록되지 않은 문제입니다.")
+            st.caption(f"완료일: {archive_item['solved']}")
 
         show_archive_solution = st.toggle("🔍 정답 보기", key="archive_show_solution")
         st.markdown(
@@ -1128,8 +1156,9 @@ with tab_archive:
             unsafe_allow_html=True,
         )
 
+        st.markdown("#### 🖨️ 인쇄용 다운로드")
         download_buttons(
             archive_puzzle,
             archive_item.get("difficulty", "초급"),
-            f"archive_{archive_item.get('id', archive_index)}",
+            f"archive_{archive_id if archive_id is not None else archive_index}",
         )
