@@ -1138,7 +1138,7 @@ with tab_archive:
         solved_key = f"archive_solved_{archive_id}"
         currently_solved = bool(archive_item.get("solved"))
 
-        checked = st.checkbox("✅ 푼 문제로 표시", value=currently_solved, key=solved_key)
+        checked = st.checkbox("✅ Solved", value=currently_solved, key=solved_key)
 
         if checked != currently_solved:
             success = mark_puzzle_solved(archive_id) if checked else unmark_puzzle_solved(archive_id)
