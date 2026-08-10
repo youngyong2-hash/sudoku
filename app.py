@@ -837,7 +837,7 @@ with tab_read:
                 )
 
 # -----------------------------------------------------------------------------
-# 탭 2. 문제생성 (보관함 조회 섹션 제거, 방금 생성한 문제만 표시)
+# 탭 2. 문제생성 (보관함 조회 섹션 제거, 방금 생성한 문제만 표시 + PDF/PNG 다운로드)
 # -----------------------------------------------------------------------------
 with tab_create:
     st.subheader("🎲 난이도별 스도쿠 문제 생성")
@@ -868,10 +868,12 @@ with tab_create:
             ),
             unsafe_allow_html=True,
         )
+
+        st.markdown("#### 🖨️ 인쇄용 다운로드")
         download_buttons(st.session_state["puzzle"], st.session_state["difficulty"], "new")
 
 # -----------------------------------------------------------------------------
-# 탭 3. 문제입력 (직접 입력 / 사진 AI 입력, 방금 입력한 것만 표시)
+# 탭 3. 문제입력 (직접 입력 / 사진 AI 입력, 방금 입력한 것만 표시 + PDF/PNG 다운로드)
 # -----------------------------------------------------------------------------
 with tab_manual:
     st.subheader("✍️ 문제 직접 입력")
@@ -885,6 +887,7 @@ with tab_manual:
             for row in range(9):
                 st.session_state[f"manual_row_{row}"] = ""
             st.session_state["manual_reset_pending"] = False
+            st.session_state.pop("manual_saved_puzzle", None)
 
         st.write("한 줄에 9자리 숫자, 빈칸은 0. 예: 310040275")
         row_texts = []
@@ -924,9 +927,25 @@ with tab_manual:
                     try:
                         save_puzzle(manual_difficulty, board, solution, source="직접입력")
                         st.success("문제가 저장되었습니다.")
-                        st.markdown(render_board(board, solution), unsafe_allow_html=True)
+                        st.session_state["manual_saved_puzzle"] = {
+                            "board": board,
+                            "solution": solution,
+                            "difficulty": manual_difficulty,
+                        }
                     except Exception as error:
                         st.warning(f"저장 중 오류: {error}")
+
+        if "manual_saved_puzzle" in st.session_state:
+            saved = st.session_state["manual_saved_puzzle"]
+            st.markdown(f"### 📋 방금 저장한 문제 ({saved['difficulty']})")
+            show_manual_solution = st.toggle("🔍 정답 보기", key="manual_type_show_solution")
+            st.markdown(
+                render_board(saved["board"], saved["solution"] if show_manual_solution else None),
+                unsafe_allow_html=True,
+            )
+
+            st.markdown("#### 🖨️ 인쇄용 다운로드")
+            download_buttons(saved["board"], saved["difficulty"], "manual_type")
 
         if st.button("초기화", key="manual_type_reset"):
             st.session_state["manual_reset_pending"] = True
@@ -941,7 +960,7 @@ with tab_manual:
             if st.session_state.get("manual_photo_hash") != file_hash:
                 st.session_state["manual_photo_hash"] = file_hash
                 st.session_state["manual_photo_rotate"] = 0
-                for key in ("manual_photo_crop_hash", "manual_ai_grid"):
+                for key in ("manual_photo_crop_hash", "manual_ai_grid", "manual_photo_saved_puzzle"):
                     st.session_state.pop(key, None)
 
             try:
@@ -1036,10 +1055,26 @@ with tab_manual:
                                 try:
                                     save_puzzle(manual_difficulty, board, solution, source="사진입력")
                                     st.success("문제가 저장되었습니다.")
-                                    st.markdown(render_board(board, solution), unsafe_allow_html=True)
+                                    st.session_state["manual_photo_saved_puzzle"] = {
+                                        "board": board,
+                                        "solution": solution,
+                                        "difficulty": manual_difficulty,
+                                    }
                                     st.session_state.pop("manual_ai_grid", None)
                                 except Exception as error:
                                     st.warning(f"저장 중 오류: {error}")
+
+                if "manual_photo_saved_puzzle" in st.session_state:
+                    saved = st.session_state["manual_photo_saved_puzzle"]
+                    st.markdown(f"### 📋 방금 저장한 문제 ({saved['difficulty']})")
+                    show_photo_solution = st.toggle("🔍 정답 보기", key="manual_photo_show_solution")
+                    st.markdown(
+                        render_board(saved["board"], saved["solution"] if show_photo_solution else None),
+                        unsafe_allow_html=True,
+                    )
+
+                    st.markdown("#### 🖨️ 인쇄용 다운로드")
+                    download_buttons(saved["board"], saved["difficulty"], "manual_photo")
 
 # -----------------------------------------------------------------------------
 # 탭 4. 보관함 (검색/조회 전용, 풀이 기능 없음)
