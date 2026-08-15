@@ -1,24 +1,24 @@
-YAML 
-name: Streamlit Keep Alive 
+name: Streamlit Keep Alive
 
-on:   
-	schedule:     
-	- cron: '0 0,12 * * *' # 12시간마다 자동 실행   
-	workflow_dispatch:      # 수동 실행 허용
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # 6시간마다 실행 (12시간 슬립 정책보다 여유있게)
+  workflow_dispatch:
 
- jobs:   
-	auto_commit:    
-		 runs-on: ubuntu-latest     
-		
-	permissions:    
-	contents: write     
+jobs:
+  wake_app:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-	steps:      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-		 - uses: actions/checkout@v4       
-		- name: Create empty commit        
-	 run: |           
-		git config --local user.email "github-actions[bot]@users.noreply.github.com"           
-		git config --local user.name "github-actions[bot]"           
-		git commit --allow-empty -m "Keep alive: Prevent Streamlit sleep mode"           
-		git push
+      - name: Install dependencies
+        run: |
+          pip install selenium
+
+      - name: Run wake-up script
+        run: python wake_app.py
