@@ -105,6 +105,7 @@ st.markdown("""
         .sudoku td.error { background: #fecaca; color: #991b1b; }
         .sudoku td.hint { background: #fef3c7; }
         .sudoku td.answer { background: #eff6ff; color: #1d4ed8; }
+        .sudoku td.diag { box-shadow: inset 0 0 0 2px #7c3aed; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -407,7 +408,18 @@ def generate_puzzle(difficulty, max_board_attempts=8):
     return best_puzzle, best_answer
 
 
-def find_rule_errors(board):
+# -----------------------------------------------------------------------------
+# X-스도쿠(대각선 규칙) 지원
+# -----------------------------------------------------------------------------
+def diagonal_groups():
+    """좌상단→우하단, 우상단→좌하단 대각선 좌표 그룹을 반환한다."""
+    return [
+        [(i, i) for i in range(9)],
+        [(i, 8 - i) for i in range(9)],
+    ]
+
+
+def find_rule_errors(board, use_x=False):
     errors = set()
 
     def inspect(cells):
@@ -427,10 +439,14 @@ def find_rule_errors(board):
         for box_col in range(0, 9, 3):
             inspect([(row, col) for row in range(box_row, box_row + 3) for col in range(box_col, box_col + 3)])
 
+    if use_x:
+        for diag in diagonal_groups():
+            inspect(diag)
+
     return errors
 
 
-def find_hint_cells(board):
+def find_hint_cells(board, use_x=False):
     hints = set()
 
     for row in range(9):
@@ -445,6 +461,8 @@ def find_hint_cells(board):
         [(row, col) for row in range(br, br + 3) for col in range(bc, bc + 3)]
         for br in range(0, 9, 3) for bc in range(0, 9, 3)
     ]
+    if use_x:
+        groups += diagonal_groups()
 
     for group in groups:
         possible = {}
@@ -457,6 +475,13 @@ def find_hint_cells(board):
                 hints.add(cells[0])
 
     return hints
+
+
+def diagonal_cell_set():
+    cells = set()
+    for group in diagonal_groups():
+        cells.update(group)
+    return cells
 
 
 def parse_row_strings(row_texts):
@@ -513,6 +538,21 @@ def load_puzzles(difficulty=None):
     return items
 
 
+def puzzle_signature(puzzle):
+    """퍼즐(빈칸 포함 81칸) 내용을 비교 가능한 문자열로 정규화한다."""
+    return json.dumps(puzzle, separators=(",", ":"))
+
+
+def find_duplicate_puzzle(puzzle, existing=None):
+    """보관함에 동일한 퍼즐(빈칸 배치와 숫자가 모두 같은)이 이미 있는지 찾는다."""
+    existing = load_puzzles() if existing is None else existing
+    target = puzzle_signature(puzzle)
+    for item in existing:
+        if puzzle_signature(item["puzzle"]) == target:
+            return item
+    return None
+
+
 def save_puzzle(difficulty, puzzle, solution, source=""):
     worksheet = get_worksheet()
     existing = load_puzzles()
@@ -529,6 +569,23 @@ def save_puzzle(difficulty, puzzle, solution, source=""):
         "",
     ])
     return new_id
+
+
+def save_puzzle_if_new(difficulty, puzzle, solution, source=""):
+    """보관함에 동일한 퍼즐이 이미 있으면 저장하지 않고 기존 항목을 반환한다.
+
+    Returns:
+        (puzzle_id, is_new, duplicate_item)
+        - is_new=True  : 새로 저장됨 (puzzle_id는 새 id)
+        - is_new=False : 이미 있어서 저장하지 않음 (puzzle_id는 기존 id, duplicate_item은 기존 항목)
+    """
+    existing = load_puzzles()
+    duplicate = find_duplicate_puzzle(puzzle, existing=existing)
+    if duplicate is not None:
+        return duplicate["id"], False, duplicate
+
+    new_id = save_puzzle(difficulty, puzzle, solution, source=source)
+    return new_id, True, None
 
 
 def set_puzzle_solved_status(puzzle_id, solved_text):
@@ -562,20 +619,25 @@ def archive_label(item):
 # =============================================================================
 # 렌더링
 # =============================================================================
-def render_board(board, solution=None, errors=None, hints=None):
+def render_board(board, solution=None, errors=None, hints=None, use_x=False):
     errors, hints = errors or set(), hints or set()
+    diag_cells = diagonal_cell_set() if use_x else set()
     html = "<div class='sudoku-wrap'><table class='sudoku'>"
 
     for row in range(9):
         html += "<tr>"
         for col in range(9):
             value = board[row][col]
-            css = (
-                "error" if (row, col) in errors
-                else "hint" if (row, col) in hints
-                else "answer" if value == 0 and solution
-                else ""
-            )
+            css_parts = []
+            if (row, col) in errors:
+                css_parts.append("error")
+            elif (row, col) in hints:
+                css_parts.append("hint")
+            elif value == 0 and solution:
+                css_parts.append("answer")
+            if (row, col) in diag_cells:
+                css_parts.append("diag")
+            css = " ".join(css_parts)
             shown = value or (solution[row][col] if solution else "")
             html += f"<td class='{css}'>{shown}</td>"
         html += "</tr>"
@@ -707,11 +769,16 @@ tab_read, tab_create, tab_manual, tab_archive = st.tabs([
 ])
 
 # -----------------------------------------------------------------------------
-# 탭 1. 정답확인 (기존 그대로)
+# 탭 1. 정답확인 (X-스도쿠 체크 옵션 추가)
 # -----------------------------------------------------------------------------
 with tab_read:
     st.subheader("1. 사진 업로드")
     upload = st.file_uploader("스도쿠 사진", type=["jpg", "jpeg", "png"])
+
+    use_x_sudoku = st.checkbox(
+        "◆ X-스도쿠로 확인 (두 대각선도 1~9가 겹치지 않아야 함)",
+        key="use_x_sudoku",
+    )
 
     if upload is not None:
         file_hash = hashlib.sha256(upload.getvalue()).hexdigest()
@@ -810,30 +877,32 @@ with tab_read:
                         except ValueError as error:
                             st.error(str(error))
 
-                errors = find_rule_errors(grid)
+                errors = find_rule_errors(grid, use_x=use_x_sudoku)
                 complete = all(number != 0 for row in grid for number in row)
 
                 st.markdown("---")
-                st.subheader("AI 분석 결과")
+                st.subheader("AI 분석 결과" + (" (X-스도쿠)" if use_x_sudoku else ""))
 
                 if errors:
-                    st.markdown(render_board(grid, errors=errors), unsafe_allow_html=True)
-                    st.error("규칙에 위배되는 숫자가 있습니다.")
+                    st.markdown(render_board(grid, errors=errors, use_x=use_x_sudoku), unsafe_allow_html=True)
+                    st.error("규칙에 위배되는 숫자가 있습니다." + (" (일반 규칙 또는 대각선 규칙 위반 포함)" if use_x_sudoku else ""))
                     if "analysis_image" in st.session_state:
                         st.image(
                             draw_photo_x(st.session_state["analysis_image"], errors),
                             caption="빨간 X 표시 확인", use_container_width=True,
                         )
                 elif complete:
-                    st.markdown(render_board(grid), unsafe_allow_html=True)
-                    st.success("모든 칸이 채워졌고 규칙 위반이 없습니다!")
-                    finish_hash = hashlib.sha256(json.dumps(grid).encode()).hexdigest()
+                    st.markdown(render_board(grid, use_x=use_x_sudoku), unsafe_allow_html=True)
+                    st.success("모든 칸이 채워졌고 규칙 위반이 없습니다!" + (" (대각선 규칙 포함)" if use_x_sudoku else ""))
+                    finish_hash = hashlib.sha256(
+                        (json.dumps(grid) + ("|x" if use_x_sudoku else "")).encode()
+                    ).hexdigest()
                     if st.session_state.get("celebrated") != finish_hash:
                         st.session_state["celebrated"] = finish_hash
                         st.balloons()
                 else:
-                    hints = find_hint_cells(grid)
-                    st.markdown(render_board(grid, hints=hints), unsafe_allow_html=True)
+                    hints = find_hint_cells(grid, use_x=use_x_sudoku)
+                    st.markdown(render_board(grid, hints=hints, use_x=use_x_sudoku), unsafe_allow_html=True)
                     st.info("노란색 칸은 지금 바로 채울 수 있는 칸입니다." if hints else "지금은 확실한 힌트가 없습니다.")
 
                 st.download_button(
@@ -846,7 +915,7 @@ with tab_read:
                 )
 
 # -----------------------------------------------------------------------------
-# 탭 2. 문제생성 (보관함 조회 섹션 제거, 방금 생성한 문제만 표시 + PDF/PNG 다운로드)
+# 탭 2. 문제생성 (중복 문제 저장 방지)
 # -----------------------------------------------------------------------------
 with tab_create:
     st.subheader("🎲 난이도별 스도쿠 문제 생성")
@@ -862,8 +931,11 @@ with tab_create:
                 puzzle, answer = generate_puzzle(difficulty)
                 new_id = None
                 try:
-                    new_id = save_puzzle(difficulty, puzzle, answer, source="생성")
-                    st.success("새 문제가 만들어져 보관함에 저장되었습니다.")
+                    new_id, is_new, duplicate = save_puzzle_if_new(difficulty, puzzle, answer, source="생성")
+                    if is_new:
+                        st.success("새 문제가 만들어져 보관함에 저장되었습니다.")
+                    else:
+                        st.info(f"이미 보관함에 있는 문제입니다. (#{duplicate['id']} · {duplicate['difficulty']}) 저장하지 않았습니다.")
                 except Exception as error:
                     st.warning(f"보관함 저장 중 오류: {error}")
                 st.session_state.update(
@@ -885,7 +957,7 @@ with tab_create:
         download_buttons(st.session_state["puzzle"], st.session_state["difficulty"], "new")
 
 # -----------------------------------------------------------------------------
-# 탭 3. 문제입력 (직접 입력 / 사진 AI 입력, 방금 입력한 것만 표시 + PDF/PNG 다운로드)
+# 탭 3. 문제입력 (직접 입력 / 사진 AI 입력, 중복 문제 저장 방지)
 # -----------------------------------------------------------------------------
 with tab_manual:
     st.subheader("✍️ 문제 직접 입력")
@@ -937,8 +1009,13 @@ with tab_manual:
                     st.error(error_message)
                 else:
                     try:
-                        new_id = save_puzzle(manual_difficulty, board, solution, source="직접입력")
-                        st.success("문제가 저장되었습니다.")
+                        new_id, is_new, duplicate = save_puzzle_if_new(
+                            manual_difficulty, board, solution, source="직접입력",
+                        )
+                        if is_new:
+                            st.success("문제가 저장되었습니다.")
+                        else:
+                            st.info(f"이미 보관함에 있는 문제입니다. (#{duplicate['id']} · {duplicate['difficulty']}) 저장하지 않았습니다.")
                         st.session_state["manual_saved_puzzle"] = {
                             "id": new_id,
                             "board": board,
@@ -1066,8 +1143,13 @@ with tab_manual:
                                 st.error(error_message)
                             else:
                                 try:
-                                    new_id = save_puzzle(manual_difficulty, board, solution, source="사진입력")
-                                    st.success("문제가 저장되었습니다.")
+                                    new_id, is_new, duplicate = save_puzzle_if_new(
+                                        manual_difficulty, board, solution, source="사진입력",
+                                    )
+                                    if is_new:
+                                        st.success("문제가 저장되었습니다.")
+                                    else:
+                                        st.info(f"이미 보관함에 있는 문제입니다. (#{duplicate['id']} · {duplicate['difficulty']}) 저장하지 않았습니다.")
                                     st.session_state["manual_photo_saved_puzzle"] = {
                                         "id": new_id,
                                         "board": board,
