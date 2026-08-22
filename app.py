@@ -739,7 +739,8 @@ def make_pdf(board, date_value, difficulty):
 
 def download_buttons(board, difficulty, prefix):
     st.caption("PDF 또는 PNG로 다운로드해서 인쇄하거나 사진첩에 저장할 수 있습니다.")
-    date_value = st.date_input("날짜", value=dt.date.today(), key=f"{prefix}_date")
+    today_kst = dt.datetime.now(ZoneInfo("Asia/Seoul")).date()
+    date_value = st.date_input("날짜", value=today_kst, key=f"{prefix}_date")
     stamp = date_value.strftime("%Y%m%d")
 
     left, right = st.columns(2)
